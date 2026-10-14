@@ -64,7 +64,7 @@ Las 9 estaciones tienen los 3.468 días del período y `TMEDIA` no tiene faltant
 ## Estructura del repositorio
 
 ```
-2-da-Pre-entrega-/
+forecast-demanda-mem/
 ├── README.md
 ├── requirements.txt
 ├── data/
