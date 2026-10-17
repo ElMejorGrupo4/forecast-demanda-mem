@@ -14,7 +14,8 @@ CAMMESA, el operador del Mercado Eléctrico Mayorista (MEM), tiene que garantiza
 |---|---|---|---|
 | CAMMESA — "Demanda Horaria por Tipo" | Demanda real neta total del MEM, paso horario, desagregada en Distribuidores y Grandes Usuarios | ene-2023 → jul-2026 | Base del modelo |
 | CAMMESA — "Demanda Horaria por Regiones" | Total MEM + 9 regiones, paso horario | ene-2021 → dic-2023 | Base del modelo (2021–2022) y análisis regional |
-| Open-Meteo — temperatura horaria (reanálisis ERA5), coordenadas de Aeroparque | Temperatura horaria de Buenos Aires | ene-2021 → jul-2026 | Variable climática del modelo |
+| Open-Meteo — temperatura horaria (reanálisis ERA5), coordenadas de Aeroparque | Temperatura horaria observada de Buenos Aires | ene-2021 → jul-2026 | Variable climática del modelo (entrenamiento) |
+| Open-Meteo — *Previous Runs API* (`temperature_2m_previous_day1`), coordenadas de Aeroparque | Temperatura horaria de Buenos Aires pronosticada 24 h antes | ene-2025 → jul-2026 | Variable climática del modelo (test) |
 | CAMMESA (demanda diaria por región) + SMN (clima diario) — `dataset_demanda_por_region.csv` | Demanda media diaria de las 9 regiones con temperatura, humedad, viento, presión, etc. de una estación representativa del SMN por región | ene-2017 → jun-2026 | EDA regional (no es insumo del modelo horario) |
 
 Las dos planillas de CAMMESA coinciden hora a hora en el año que se solapan (2023, diferencia máxima 0,04 %), por lo que se encadenan en una única serie continua de **48.912 horas (2021-01-01 → 2026-07-31), sin huecos ni nulos**.
@@ -77,7 +78,8 @@ forecast-demanda-mem/
 │   └── figures/      # gráficos exportados por los notebooks
 └── src/
     ├── descargar_demanda_mem.py   # baja las planillas CAMMESA y arma la serie 2021-2026
-    ├── descargar_temperatura.py   # baja la temperatura horaria de Buenos Aires (Open-Meteo)
+    ├── descargar_temperatura.py   # baja la temperatura horaria observada de Buenos Aires (Open-Meteo)
+    ├── descargar_temperatura_pronosticada.py  # baja la temperatura pronosticada 24 h antes, período de test (Open-Meteo)
     └── construir_dataset_regional.py  # arma el dataset regional diario con clima (CAMMESA + SMN)
 ```
 
@@ -88,6 +90,7 @@ pip install -r requirements.txt
 python src/descargar_demanda_mem.py        # genera data/processed/demanda_horaria_mem.csv
 python src/construir_dataset_regional.py   # genera data/processed/dataset_demanda_por_region.csv
 python src/descargar_temperatura.py        # genera data/processed/temperatura_horaria_ba.csv
+python src/descargar_temperatura_pronosticada.py  # genera data/processed/temperatura_pronosticada_ba.csv
 jupyter notebook notebooks/01_eda_inicial.ipynb
 jupyter notebook notebooks/02_modelo_supervisado.ipynb
 ```
@@ -107,16 +110,21 @@ jupyter notebook notebooks/02_modelo_supervisado.ipynb
 
 Notebook `02_modelo_supervisado.ipynb`. Predice la demanda horaria del MEM solo con calendario (hora, día de semana, mes, hábil/no hábil) y temperatura horaria de Buenos Aires, transformada en grados de calefacción y refrigeración con base en 18 °C, la zona de confort observada en los datos. Entrenamiento 2021–2024 y test ene-2025 → jul-2026, siempre por tiempo. Los hiperparámetros se eligen con validación cruzada temporal (`TimeSeriesSplit`).
 
+El modelo se entrena con la temperatura observada, pero el test se evalúa con la temperatura **pronosticada 24 h antes**, que es la que se conocería al momento de pronosticar. Así se evita la fuga de información de suponer un pronóstico del tiempo perfecto.
+
 | Modelo (regresión) | MAPE validación | MAPE test |
 |---|---|---|
-| Referencia ingenua (perfil promedio) | — | 7,6 % |
-| Regresión lineal | 6,3 % | 6,0 % |
+| Referencia: misma hora de la semana anterior | — | 9,1 % |
+| Referencia: perfil promedio | — | 7,6 % |
+| Regresión lineal | 6,3 % | 6,1 % |
 | Random Forest | 4,8 % | 4,2 % |
-| **Gradient Boosting (elegido)** | **4,5 %** | **4,0 %** |
+| **Gradient Boosting (elegido)** | **4,5 %** | **4,1 %** |
 
-Clasificación de **horas pico** (demanda sobre el percentil 90 de train): el Random Forest anticipa el 91 % de los picos con una precisión del 63 % (AUC-PR 0,88) y supera a la regresión logística.
+MAPE de test con temperatura pronosticada. Con la temperatura observada el Gradient Boosting daría 3,97 %: el error del pronóstico del tiempo (~0,9 °C) le suma apenas 0,08 puntos.
 
-Limitaciones: el modelo no conoce la tendencia de crecimiento de la demanda (subestima 0,7 % en 2025 y 2,6 % en 2026), usa temperatura observada en lugar de pronosticada y una sola ciudad, por lo que el mayor error está en las tardes de verano con olas de calor.
+Clasificación de **horas pico** (demanda sobre el percentil 90 de train): el Random Forest anticipa el 92 % de los picos con una precisión del 62 % (AUC-PR 0,875) y supera a la regresión logística.
+
+Limitaciones: el modelo no conoce la tendencia de crecimiento de la demanda (subestima 0,2 % en 2025 y 2,3 % en 2026) y usa la temperatura de una sola ciudad, por lo que el mayor error está en las tardes de verano con olas de calor.
 
 ## Integrantes
 
