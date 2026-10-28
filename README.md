@@ -15,7 +15,7 @@ CAMMESA, el operador del Mercado Eléctrico Mayorista (MEM), tiene que garantiza
 | CAMMESA — "Demanda Horaria por Tipo" | Demanda real neta total del MEM, paso horario, desagregada en Distribuidores y Grandes Usuarios | ene-2023 → jul-2026 | Base del modelo |
 | CAMMESA — "Demanda Horaria por Regiones" | Total MEM + 9 regiones, paso horario | ene-2021 → dic-2023 | Base del modelo (2021–2022) y análisis regional |
 | Open-Meteo — temperatura horaria (reanálisis ERA5), coordenadas de Aeroparque | Temperatura horaria observada de Buenos Aires | ene-2021 → jul-2026 | Variable climática del modelo (entrenamiento) |
-| Open-Meteo — *Previous Runs API* (`temperature_2m_previous_day1`), coordenadas de Aeroparque | Temperatura horaria de Buenos Aires pronosticada 24 h antes | ene-2025 → jul-2026 | Variable climática del modelo (test) |
+| Open-Meteo — *Single Runs API*, modelo ECMWF IFS, coordenadas de Aeroparque | Para cada día del test, la temperatura horaria de la corrida disponible al emitir el pronóstico (06 UTC del día anterior) | ene-2025 → jul-2026 | Variable climática del modelo (test) |
 | CAMMESA (demanda diaria por región) + SMN (clima diario) — `dataset_demanda_por_region.csv` | Demanda media diaria de las 9 regiones con temperatura, humedad, viento, presión, etc. de una estación representativa del SMN por región | ene-2017 → jun-2026 | EDA regional (no es insumo del modelo horario) |
 
 Las dos planillas de CAMMESA coinciden hora a hora en el año que se solapan (2023, diferencia máxima 0,04 %), por lo que se encadenan en una única serie continua de **48.912 horas (2021-01-01 → 2026-07-31), sin huecos ni nulos**.
@@ -80,7 +80,7 @@ forecast-demanda-mem/
 └── src/
     ├── descargar_demanda_mem.py   # baja las planillas CAMMESA y arma la serie 2021-2026
     ├── descargar_temperatura.py   # baja la temperatura horaria observada de Buenos Aires (Open-Meteo)
-    ├── descargar_temperatura_pronosticada.py  # baja la temperatura pronosticada 24 h antes, período de test (Open-Meteo)
+    ├── descargar_temperatura_pronosticada.py  # baja la corrida de ECMWF disponible al emitir cada día del test (Open-Meteo)
     └── construir_dataset_regional.py  # arma el dataset regional diario con clima (CAMMESA + SMN)
 ```
 
@@ -88,7 +88,7 @@ forecast-demanda-mem/
 
 ```bash
 pip install -r requirements.txt
-python src/descargar_demanda_mem.py        # genera data/processed/demanda_horaria_mem.csv
+python src/descargar_demanda_mem.py        # genera data/processed/demanda_horaria_mem.csv (--actualizar para bajar meses nuevos)
 python src/construir_dataset_regional.py   # genera data/processed/dataset_demanda_por_region.csv
 python src/descargar_temperatura.py        # genera data/processed/temperatura_horaria_ba.csv
 python src/descargar_temperatura_pronosticada.py  # genera data/processed/temperatura_pronosticada_ba.csv
@@ -108,32 +108,54 @@ jupyter notebook notebooks/03_clustering.ipynb
 - La demanda tiene forma de **U** con la temperatura (mínimo en ~19 °C de temperatura media en GBA). La correlación lineal casi no la detecta, lo que refuerza el uso de modelos no lineales o de variables de grados-día.
 - Las 11 variables climáticas del SMN quedaron alineadas y son consistentes en 2017–2026, pero no todas están listas para modelar: `HELIOF`, `TMAX` y `TMIN` tienen faltantes.
 
-## Modelo supervisado (pre-entregas 3 y 4)
+## Modelo supervisado (pre-entregas 3 y 4, revisado)
 
-Notebook `02_modelo_supervisado.ipynb`. Predice la demanda horaria del MEM solo con calendario (hora, día de semana, mes, hábil/no hábil) y temperatura horaria de Buenos Aires, transformada en grados de calefacción y refrigeración con base en 18 °C, la zona de confort observada en los datos. Entrenamiento 2021–2024 y test ene-2025 → jul-2026, siempre por tiempo. Los hiperparámetros se eligen con validación cruzada temporal (`TimeSeriesSplit`).
+Notebook `02_modelo_supervisado.ipynb`. Predice la demanda horaria del MEM del día siguiente solo con calendario (hora, día de semana, mes, hábil/no hábil) y temperatura horaria de Buenos Aires, transformada en grados de calefacción y refrigeración con base en 18 °C, la zona de confort observada en los datos. Entrenamiento 2021–2024 y test ene-2025 → jul-2026, siempre por tiempo. Los hiperparámetros se eligen con validación cruzada temporal (`TimeSeriesSplit`), sin validaciones internas al azar (`early_stopping=False`).
 
-El modelo se entrena con la temperatura observada, pero el test se evalúa con la temperatura **pronosticada 24 h antes**, que es la que se conocería al momento de pronosticar. Así se evita la fuga de información de suponer un pronóstico del tiempo perfecto.
+**Test realista.** Se supone que el pronóstico del día D se emite el día D-1 a las 12:00. El modelo se entrena con temperatura observada, pero en el test usa la temperatura de **la corrida del modelo ECMWF disponible en ese momento** (06 UTC de D-1), la misma para las 24 horas del día. Así se evita la fuga de información de suponer un pronóstico del tiempo perfecto.
 
 | Modelo (regresión) | MAPE validación | MAPE test | WAPE test |
 |---|---|---|---|
 | Referencia: misma hora de la semana anterior | — | 9,1 % | 9,2 % |
 | Referencia: perfil promedio | — | 7,6 % | 7,9 % |
 | Regresión lineal | 6,3 % | 6,1 % | 6,2 % |
-| Random Forest | 4,8 % | 4,2 % | 4,3 % |
-| **Gradient Boosting (elegido)** | **4,5 %** | **4,1 %** | **4,2 %** |
-| **Gradient Boosting reentrenado cada mes** | — | **4,0 %** | **4,1 %** |
+| Random Forest | 4,8 % | 4,3 % | 4,4 % |
+| **Gradient Boosting (modelo explicativo elegido)** | **4,5 %** | **4,1 %** | **4,2 %** |
+| Gradient Boosting reentrenado cada mes (últimos 24 meses) | — | 4,1 % | 4,2 % |
+| Variante predictiva: + demanda de hace 48 h y 168 h | 4,1 % | 3,6 % | 3,7 % |
 
-Errores de test con temperatura pronosticada. El WAPE (suma de errores sobre suma de demanda) pondera más las horas de mayor demanda, como se mide el desvío en el despacho. Con la temperatura observada el Gradient Boosting daría 3,97 %: el error del pronóstico del tiempo (~0,9 °C) le suma apenas 0,08 puntos.
+El WAPE (suma de errores sobre suma de demanda) pondera más las horas de mayor demanda. Con la temperatura observada el Gradient Boosting daría 3,98 %: el error del pronóstico del tiempo (0,7 °C en promedio) le suma 0,09 puntos.
 
-Clasificación de **horas pico** (demanda sobre el percentil 90 de train): el Random Forest anticipa el 92 % de los picos con una precisión del 62 % (AUC-PR 0,875) y supera a la regresión logística.
+Clasificación de **horas de demanda alta** (sobre el percentil 90 de train): el Random Forest anticipa el 91,5 % con una precisión del 62 % (AUC-PR 0,870) y supera a la regresión logística.
 
-**Mejoras de la pre-entrega 4:**
+**Análisis complementarios:**
 
-- **Reentrenamiento mensual.** El modelo fijo subestimaba cada vez más por la tendencia de crecimiento (2,2 % en 2026). Reentrenarlo cada mes con los últimos 24 meses, una ventana elegida validando sobre 2024, baja el sesgo total de 190 a 27 MWh y el de 2026 a 1,0 %.
-- **Días de calor extremo** (máxima por encima del percentil 95 de train, 30,9 °C). El error es un 22 % mayor (MAPE 4,8 % contra 4,0 %), entre las 10 y las 19 h. No es un sesgo hacia abajo: son días más inciertos.
-- **Intervalos de predicción del 80 %.** Salen de regresión cuantil (cuantiles 10 y 90) y se calibran con un método conformal sobre los errores de los últimos 12 meses. Cubren el 79,7 % de las horas, con un ancho medio de ~2.200 MW, que es una medida de la reserva necesaria. En una ola de calor prolongada, como la de febrero de 2025, la demanda puede superar la banda varias horas seguidas.
+- **Picos.** El modelo ubica bien la hora del máximo diario (89 % de los días a ±1 h), pero tiende a quedarse corto en su magnitud: en el 60 % de los días subestima el máximo, y en las horas de demanda alta el MAPE es 5,6 %.
+- **Días de calor extremo** (máxima por encima del percentil 95 de train, 30,9 °C). El error es un 25 % mayor (MAPE 5,0 % contra 4,0 %), sin sesgo claro: son días más inciertos.
+- **Reentrenamiento mensual** con los últimos 24 meses (ventana elegida validando sobre 2024). Reduce el sesgo de 234 a 67 MWh y el de 2026 de 2,4 % a 1,0 %, pero no el error total.
+- **Intervalos de predicción del 80 %.** Salen de regresión cuantil y se calibran con un método conformal sobre los errores de los últimos 12 meses. Cubren el 79,3 % de las horas en promedio, pero entre el 62 % y el 90 % según el mes: en 4 de 19 meses quedan por debajo del 75 %. Cuantifican la incertidumbre de la demanda; no equivalen a la reserva del sistema.
+- **Demanda reciente.** Sumar la demanda de hace 48 y 168 horas, disponible al emitir, baja el MAPE a 3,6 %. Es la mejora más grande, pero convierte al modelo en predictivo: deja de explicar la demanda solo por calendario y clima. La variante se eligió con validación en train, pero el test ya había sido usado para explorarla, así que no es una prueba independiente.
 
-Limitaciones: la tendencia se corrige con algunos meses de retraso, se usa la temperatura de una sola ciudad (el mayor error está en las tardes de verano con olas de calor) y los días atípicos, como fiestas o un apagón, no se pueden aprender.
+**Limitaciones:**
+
+- **Supuestos de operación.** La hora de emisión y la disponibilidad de la demanda en tiempo real son supuestos.
+- **Subestimación de 2026.** La causa no está del todo identificada: comparando enero–julio de cada año, la demanda creció solo 0,9 %.
+- **Una sola ciudad.** La temperatura de Buenos Aires no captura las olas de calor nacionales.
+- **Calendario binario.** Hábil / no hábil no distingue vísperas, puentes ni vacaciones.
+- **Período de test reutilizado.** Los cambios de la revisión final se evaluaron sobre el mismo período de test.
+
+### Revisión antes de la entrega final
+
+Una revisión crítica del trabajo encontró errores y afirmaciones demasiado fuertes. Las correcciones principales:
+
+| Hallazgo | Corrección |
+|---|---|
+| El test usaba el pronóstico del tiempo hecho 24 h antes de **cada** hora: cada hora salía de una corrida distinta, algunas posteriores a la emisión | Se fija la emisión en D-1 12:00 y se usa una sola corrida de ECMWF por día (*Single Runs API* de Open-Meteo). El MAPE casi no cambia (4,06 % → 4,07 %), pero ahora el experimento coincide con la operación |
+| Cuatro días con el tipo de día mal etiquetado en la planilla horaria de CAMMESA: Jueves y Viernes Santo 2023 y los feriados puente del 23/03/2026 y del 10/07/2026 | `descargar_demanda_mem.py` compara el tipo de día con las fuentes de CAMMESA que distinguen 7 tipos (planilla regional y base diaria) y corrige las diferencias |
+| El Gradient Boosting separaba una validación interna al azar | `early_stopping=False` |
+| "+4 % de crecimiento en 2026" comparaba enero–julio contra un año completo | Comparando períodos equivalentes, el crecimiento es de 0,9 % |
+| Se presentaba el ancho de la banda como "la reserva necesaria", y se decía que WAPE ≈ MAPE probaba un buen desempeño en los picos | Redacción corregida; se agregaron cobertura por mes, *interval score* y métricas específicas de picos |
+| El ejemplo "hábil de invierno" del notebook 03 era el 9 de julio, feriado | Se cambió el ejemplo y se agregó un control |
 
 ## Clustering: días típicos y atípicos (pre-entrega 4)
 
@@ -160,3 +182,5 @@ Notebook `03_clustering.ipynb`. Cada día (2.038, de 2021 a jul-2026) se describ
 ## Nota sobre feriados y tipo de día
 
 CAMMESA clasifica cada día como *hábil* o *no hábil* (sábados, domingos y feriados) en sus propias planillas. Se adopta esa clasificación en lugar de construir un calendario de feriados propio, porque refleja el criterio que usa el operador para programar el despacho.
+
+La planilla horaria solo distingue esos dos tipos y tiene errores. Por eso `descargar_demanda_mem.py` la compara con las dos fuentes de CAMMESA que clasifican en 7 tipos de día: la planilla regional (2021–2023) y la base diaria (2017–2026). Si difieren, prevalece la clasificación detallada, y el script se detiene si esas dos fuentes se contradicen entre sí. Se corrigieron 4 días, todos feriados o días no laborables con demanda de feriado.
