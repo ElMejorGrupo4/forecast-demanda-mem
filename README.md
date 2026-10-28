@@ -73,7 +73,8 @@ forecast-demanda-mem/
 │   └── processed/    # datasets construidos (serie horaria MEM, temperatura horaria, regional horaria 2021-23, regional diaria con clima)
 ├── notebooks/        # numerados por etapa
 │   ├── 01_eda_inicial.ipynb          # EDA (pre-entrega 2)
-│   └── 02_modelo_supervisado.ipynb   # regresión y clasificación (pre-entrega 3)
+│   ├── 02_modelo_supervisado.ipynb   # regresión y clasificación (pre-entrega 3, ampliado en la 4)
+│   └── 03_clustering.ipynb           # días típicos y días atípicos: K-means, DBSCAN, PCA (pre-entrega 4)
 ├── reports/
 │   └── figures/      # gráficos exportados por los notebooks
 └── src/
@@ -93,6 +94,7 @@ python src/descargar_temperatura.py        # genera data/processed/temperatura_h
 python src/descargar_temperatura_pronosticada.py  # genera data/processed/temperatura_pronosticada_ba.csv
 jupyter notebook notebooks/01_eda_inicial.ipynb
 jupyter notebook notebooks/02_modelo_supervisado.ipynb
+jupyter notebook notebooks/03_clustering.ipynb
 ```
 
 `data/raw/` no se versiona en git (archivos pesados). `descargar_demanda_mem.py` baja sus planillas solo; para `construir_dataset_regional.py` hay que descargar los tres archivos crudos de las fuentes de arriba y copiarlos en `data/raw/` con esos nombres.
@@ -106,25 +108,49 @@ jupyter notebook notebooks/02_modelo_supervisado.ipynb
 - La demanda tiene forma de **U** con la temperatura (mínimo en ~19 °C de temperatura media en GBA). La correlación lineal casi no la detecta, lo que refuerza el uso de modelos no lineales o de variables de grados-día.
 - Las 11 variables climáticas del SMN quedaron alineadas y son consistentes en 2017–2026, pero no todas están listas para modelar: `HELIOF`, `TMAX` y `TMIN` tienen faltantes.
 
-## Modelo supervisado (pre-entrega 3)
+## Modelo supervisado (pre-entregas 3 y 4)
 
 Notebook `02_modelo_supervisado.ipynb`. Predice la demanda horaria del MEM solo con calendario (hora, día de semana, mes, hábil/no hábil) y temperatura horaria de Buenos Aires, transformada en grados de calefacción y refrigeración con base en 18 °C, la zona de confort observada en los datos. Entrenamiento 2021–2024 y test ene-2025 → jul-2026, siempre por tiempo. Los hiperparámetros se eligen con validación cruzada temporal (`TimeSeriesSplit`).
 
 El modelo se entrena con la temperatura observada, pero el test se evalúa con la temperatura **pronosticada 24 h antes**, que es la que se conocería al momento de pronosticar. Así se evita la fuga de información de suponer un pronóstico del tiempo perfecto.
 
-| Modelo (regresión) | MAPE validación | MAPE test |
-|---|---|---|
-| Referencia: misma hora de la semana anterior | — | 9,1 % |
-| Referencia: perfil promedio | — | 7,6 % |
-| Regresión lineal | 6,3 % | 6,1 % |
-| Random Forest | 4,8 % | 4,2 % |
-| **Gradient Boosting (elegido)** | **4,5 %** | **4,1 %** |
+| Modelo (regresión) | MAPE validación | MAPE test | WAPE test |
+|---|---|---|---|
+| Referencia: misma hora de la semana anterior | — | 9,1 % | 9,2 % |
+| Referencia: perfil promedio | — | 7,6 % | 7,9 % |
+| Regresión lineal | 6,3 % | 6,1 % | 6,2 % |
+| Random Forest | 4,8 % | 4,2 % | 4,3 % |
+| **Gradient Boosting (elegido)** | **4,5 %** | **4,1 %** | **4,2 %** |
+| **Gradient Boosting reentrenado cada mes** | — | **4,0 %** | **4,1 %** |
 
-MAPE de test con temperatura pronosticada. Con la temperatura observada el Gradient Boosting daría 3,97 %: el error del pronóstico del tiempo (~0,9 °C) le suma apenas 0,08 puntos.
+Errores de test con temperatura pronosticada. El WAPE (suma de errores sobre suma de demanda) pondera más las horas de mayor demanda, como se mide el desvío en el despacho. Con la temperatura observada el Gradient Boosting daría 3,97 %: el error del pronóstico del tiempo (~0,9 °C) le suma apenas 0,08 puntos.
 
 Clasificación de **horas pico** (demanda sobre el percentil 90 de train): el Random Forest anticipa el 92 % de los picos con una precisión del 62 % (AUC-PR 0,875) y supera a la regresión logística.
 
-Limitaciones: el modelo no conoce la tendencia de crecimiento de la demanda (subestima 0,2 % en 2025 y 2,3 % en 2026) y usa la temperatura de una sola ciudad, por lo que el mayor error está en las tardes de verano con olas de calor.
+**Mejoras de la pre-entrega 4:**
+
+- **Reentrenamiento mensual.** El modelo fijo subestimaba cada vez más por la tendencia de crecimiento (2,2 % en 2026). Reentrenarlo cada mes con los últimos 24 meses, una ventana elegida validando sobre 2024, baja el sesgo total de 190 a 27 MWh y el de 2026 a 1,0 %.
+- **Días de calor extremo** (máxima por encima del percentil 95 de train, 30,9 °C). El error es un 22 % mayor (MAPE 4,8 % contra 4,0 %), entre las 10 y las 19 h. No es un sesgo hacia abajo: son días más inciertos.
+- **Intervalos de predicción del 80 %.** Salen de regresión cuantil (cuantiles 10 y 90) y se calibran con un método conformal sobre los errores de los últimos 12 meses. Cubren el 79,7 % de las horas, con un ancho medio de ~2.200 MW, que es una medida de la reserva necesaria. En una ola de calor prolongada, como la de febrero de 2025, la demanda puede superar la banda varias horas seguidas.
+
+Limitaciones: la tendencia se corrige con algunos meses de retraso, se usa la temperatura de una sola ciudad (el mayor error está en las tardes de verano con olas de calor) y los días atípicos, como fiestas o un apagón, no se pueden aprender.
+
+## Clustering: días típicos y atípicos (pre-entrega 4)
+
+Notebook `03_clustering.ipynb`. Cada día (2.038, de 2021 a jul-2026) se describe con sus 24 demandas horarias divididas por el promedio del día, para agrupar por **forma** de la curva y no por nivel. El tipo de día, el mes y la temperatura no entran al clustering: se usan después para interpretar.
+
+**K-means (k = 4)**, con k elegido por codo y silueta. Encuentra cuatro perfiles de carga con sentido físico:
+
+| Grupo | Días | Forma de la curva |
+|---|---|---|
+| Hábil de invierno | 847 | Dos picos: mañana (~11 h) y noche (~20 h) |
+| Hábil de verano | 480 | Pico de tarde (14–16 h), por el aire acondicionado |
+| No hábil de invierno | 428 | Sin pico de mañana; pico de noche muy marcado |
+| No hábil de verano | 283 | La más plana; incluye días hábiles de vacaciones de enero y febrero |
+
+- **PCA:** dos componentes explican el 79 % de la variación. Una es el "pico de la tarde" (eje verano ↔ invierno) y la otra la "madrugada alta, mañana baja" (eje no hábil ↔ hábil).
+- **Los grupos los marca más la temperatura que el calendario:** los meses de transición se reparten según haga calor o no.
+- **DBSCAN** no encuentra grupos separados: los días forman un continuo (silueta de K-means ~0,37). Usado como detector de anomalías, marca un 4 % de días atípicos: fiestas de fin de año, carnavales, Semana Santa, días de calor extremo y el **apagón del 1/3/2023**, que detectó sin información externa.
 
 ## Integrantes
 
