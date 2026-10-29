@@ -1,0 +1,13 @@
+{
+  "fuente": "https://single-runs-api.open-meteo.com/v1/forecast",
+  "documentacion": "https://open-meteo.com/en/docs/single-runs-api",
+  "modelo": "ecmwf_ifs",
+  "latitud": -34.56,
+  "longitud": -58.42,
+  "zona_horaria": "America/Argentina/Buenos_Aires",
+  "emision": "dia D-1 a las 12:00 local",
+  "corte": "dia D-1 a las 11:00 local",
+  "demora_publicacion_supuesta_h": 6.0,
+  "horas_por_dia": "D-1 01:00 a D 23:00 local",
+  "descargado_utc": "2026-10-29 03:44"
+}
