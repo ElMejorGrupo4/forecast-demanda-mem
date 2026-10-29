@@ -68,6 +68,11 @@ Las 9 estaciones tienen los 3.468 días del período y `TMEDIA` no tiene faltant
 forecast-demanda-mem/
 ├── README.md
 ├── requirements.txt
+├── api/
+│   └── main.py       # API con FastAPI que sirve el modelo
+├── models/           # modelo entrenado que carga la API (+ metadatos)
+├── tests/
+│   └── test_api.py   # pruebas automáticas de la API
 ├── data/
 │   ├── raw/          # descargas sin modificar (no versionadas en git)
 │   ├── processed/    # datasets construidos (serie horaria MEM, temperaturas, regional horaria 2021-23, regional diaria con clima) y su procedencia (*.meta.json)
@@ -84,7 +89,8 @@ forecast-demanda-mem/
     ├── descargar_temperatura.py   # baja la temperatura horaria histórica de Buenos Aires, ECMWF IFS (Open-Meteo)
     ├── descargar_temperatura_pronosticada.py  # baja la corrida de ECMWF disponible al emitir cada día del test (Open-Meteo)
     ├── construir_dataset_regional.py  # arma el dataset regional diario con clima (CAMMESA + SMN)
-    ├── modelo_demanda.py          # reglas y modelos fijados del notebook 02 (los usa el notebook 04)
+    ├── modelo_demanda.py          # reglas y modelos fijados del notebook 02 (los usan el notebook 04 y la API)
+    ├── entrenar_modelo.py         # entrena y guarda el modelo que sirve la API
     └── preparar_agosto_2026.py    # prepara los datos de agosto de 2026 para la evaluación nueva
 ```
 
@@ -101,6 +107,9 @@ jupyter notebook notebooks/02_modelo_supervisado.ipynb
 jupyter notebook notebooks/03_clustering.ipynb
 python src/preparar_agosto_2026.py        # necesita la planilla actualizada de CAMMESA en data/raw/periodo_nuevo/
 jupyter notebook notebooks/04_evaluacion_agosto_2026.ipynb
+python src/entrenar_modelo.py             # genera models/modelo_demanda.joblib y .json
+python -m pytest tests                    # pruebas de la API
+uvicorn api.main:app --reload             # levanta la API: documentación en http://127.0.0.1:8000/docs
 ```
 
 `data/raw/` no se versiona en git (archivos pesados). `descargar_demanda_mem.py` baja sus planillas solo; para `construir_dataset_regional.py` hay que descargar los tres archivos crudos de las fuentes de arriba y copiarlos en `data/raw/` con esos nombres.
@@ -207,6 +216,33 @@ Notebook `04_evaluacion_agosto_2026.ipynb`. El período de test del notebook 02 
 - **Empeora o falla:** el error es más alto que en agosto de 2025, y todos los modelos subestiman (el reentrenado, 436 MWh en promedio). La **banda del 80 % cubre solo el 72,4 %** de las horas, con la demanda por encima el 26 % del tiempo: la subcobertura de los intervalos se repite en un mes nuevo.
 - **Sensibilidad:** con junio revisado, el MAPE no cambia (3,98 %) y la cobertura pasa a 74,2 %.
 - **Alcance:** es un solo mes de invierno. No valida el desempeño en verano ni en olas de calor, ni la calibración de la banda.
+
+## Diseño de la API (FastAPI)
+
+`api/main.py` sirve el modelo de calendario y clima para pronosticar las 24 horas de un día.
+
+| Endpoint | Qué hace |
+|---|---|
+| `GET /salud` | Estado de la API |
+| `GET /modelo` | Metadatos del modelo: variables, hiperparámetros, datos de entrenamiento, ajuste de la banda, métricas y advertencias |
+| `POST /pronostico` | Pronóstico de un día: demanda de cada hora, banda del 80 % y resumen (media, máximo, hora del máximo, energía del día) |
+
+Ejemplo de pedido:
+
+```json
+{"fecha": "2026-10-30", "es_feriado": false}
+```
+
+Si el pedido no trae temperaturas, la API baja el pronóstico de **ECMWF IFS** de Open-Meteo para ese día y el anterior, el mismo modelo meteorológico del entrenamiento. Open-Meteo lo ofrece desde unos 3 meses atrás hasta unos 15 días adelante. También se pueden mandar las 24 temperaturas (`temperaturas`, y opcionalmente `temperaturas_dia_anterior`), para simular escenarios ("¿y si mañana hacen 38 °C?") o usar la API sin internet.
+
+**Decisiones de diseño:**
+
+- **Modelo servido.** Es el Gradient Boosting de calendario y clima. Solo necesita la fecha y la temperatura, a diferencia de la variante con rezagos, que exigiría mandar 48 valores de demanda pasada.
+- **Entrenamiento separado.** `src/entrenar_modelo.py` entrena con las reglas fijadas (`src/modelo_demanda.py`): los últimos 24 meses disponibles al corte del 31/07/2026. Es el mismo modelo evaluado en agosto de 2026 (MAPE 3,98 %). La API solo carga el archivo; no entrena al arrancar.
+- **Tipo de día.** Sábados y domingos son no hábiles. Los feriados los indica el usuario con `es_feriado`, porque no hay un calendario oficial de CAMMESA para fechas futuras.
+- **Banda del 80 %.** Sale de los cuantiles 10 y 90 con el ajuste conformal (234 MW). Cada respuesta incluye la advertencia de que la banda no está bien calibrada en todos los meses (72 % de cobertura en agosto de 2026).
+- **Validaciones.** El pedido se rechaza si no trae 24 temperaturas o si alguna es imposible (fuera de −20 a 50 °C). Si las temperaturas salen del rango visto en el entrenamiento, la respuesta lo advierte.
+- **Pruebas.** `tests/test_api.py` cubre los endpoints, los tipos de día, las validaciones, la consulta a Open-Meteo y su falla (sin depender de internet), y que la API arme las mismas variables que el pipeline evaluado.
 
 ## Clustering: días típicos y atípicos (pre-entrega 4)
 
