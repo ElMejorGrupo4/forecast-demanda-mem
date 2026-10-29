@@ -8,6 +8,18 @@ CAMMESA, el operador del Mercado Eléctrico Mayorista (MEM), tiene que garantiza
 
 **Objetivo del modelo:** predecir la demanda eléctrica horaria del MEM (MWh) para las próximas 24 horas, a partir de variables de calendario (hora, día de semana, mes, tipo de día) y climáticas (temperatura).
 
+## En pocas palabras
+
+El trabajo se organizó alrededor de cinco preguntas:
+
+1. **¿Qué mueve la demanda eléctrica hora a hora?** El EDA mostró tres ciclos superpuestos (diario, semanal y anual) y una relación en forma de **U** con la temperatura: la demanda es mínima entre los 18 y 19 °C y sube con el frío (calefacción) y, más todavía, con el calor (aire acondicionado). La hora del pico cambia con la estación: a la tarde en verano, a la noche en invierno.
+2. **¿Se puede anticipar con solo calendario y temperatura?** Sí. Un Gradient Boosting se equivoca en promedio un **4,1 %**, contra 9,1 % de repetir la demanda de la semana anterior. En un mes que no se usó en ningún paso del trabajo (agosto de 2026), con reglas fijadas de antemano, dio **4,0 %**.
+3. **¿Estamos midiendo bien?** Esta fue la pregunta que más trabajo llevó. El test se evalúa con el **pronóstico del tiempo** que existía al emitir, no con la temperatura que efectivamente hizo. Cada dato se usa solo si estaba disponible en ese momento. Dos revisiones críticas externas encontraron errores, y los corregimos (ver "Revisión antes de la entrega final").
+4. **¿Dónde falla?** En los **picos**: acierta la hora del máximo diario, pero tiende a quedarse corto en su valor, sobre todo en las olas de calor. La banda de incertidumbre del 80 % cubre en promedio lo que promete, pero **falla en algunos meses**.
+5. **¿Qué tipos de día existen?** Sin decirle el calendario, el clustering encontró cuatro perfiles de carga (hábil o no hábil, de verano o de invierno) y marcó como atípicos las fiestas, los feriados largos y el apagón del 1/3/2023.
+
+El resultado se puede usar a través de una **API con FastAPI**, que devuelve el pronóstico de las 24 horas de un día con su banda y sus advertencias.
+
 ## Datos
 
 | Fuente | Contenido | Período | Uso |
@@ -217,6 +229,23 @@ Notebook `04_evaluacion_agosto_2026.ipynb`. El período de test del notebook 02 
 - **Sensibilidad:** con junio revisado, el MAPE no cambia (3,98 %) y la cobertura pasa a 74,2 %.
 - **Alcance:** es un solo mes de invierno. No valida el desempeño en verano ni en olas de calor, ni la calibración de la banda.
 
+## Clustering: días típicos y atípicos (pre-entrega 4)
+
+Notebook `03_clustering.ipynb`. Cada día (2.038, de 2021 a jul-2026) se describe con sus 24 demandas horarias divididas por el promedio del día, para agrupar por **forma** de la curva y no por nivel. El tipo de día, el mes y la temperatura no entran al clustering: se usan después para interpretar.
+
+**K-means (k = 4)**, con k elegido por codo y silueta. Encuentra cuatro perfiles de carga con sentido físico:
+
+| Grupo | Días | Forma de la curva |
+|---|---|---|
+| Hábil de invierno | 847 | Dos picos: mañana (~11 h) y noche (~20 h) |
+| Hábil de verano | 480 | Pico de tarde (14–16 h), por el aire acondicionado |
+| No hábil de invierno | 428 | Sin pico de mañana; pico de noche muy marcado |
+| No hábil de verano | 283 | La más plana; incluye días hábiles de vacaciones de enero y febrero |
+
+- **PCA:** dos componentes explican el 79 % de la variación. Una es el "pico de la tarde" (eje verano ↔ invierno) y la otra la "madrugada alta, mañana baja" (eje no hábil ↔ hábil).
+- **Los grupos los marca más la temperatura que el calendario:** los meses de transición se reparten según haga calor o no.
+- **DBSCAN** no encuentra grupos separados: los días forman un continuo (silueta de K-means ~0,37). Usado como detector de anomalías, marca un 4 % de días atípicos: fiestas de fin de año, carnavales, Semana Santa, días de calor extremo y el **apagón del 1/3/2023**, que detectó sin información externa.
+
 ## Diseño de la API (FastAPI)
 
 `api/main.py` sirve el modelo de calendario y clima para pronosticar las 24 horas de un día.
@@ -244,22 +273,48 @@ Si el pedido no trae temperaturas, la API baja el pronóstico de **ECMWF IFS** d
 - **Validaciones.** El pedido se rechaza si no trae 24 temperaturas o si alguna es imposible (fuera de −20 a 50 °C). Si las temperaturas salen del rango visto en el entrenamiento, la respuesta lo advierte.
 - **Pruebas.** `tests/test_api.py` cubre los endpoints, los tipos de día, las validaciones, la consulta a Open-Meteo y su falla (sin depender de internet), y que la API arme las mismas variables que el pipeline evaluado.
 
-## Clustering: días típicos y atípicos (pre-entrega 4)
+## Reflexión: sesgos, límites y uso responsable
 
-Notebook `03_clustering.ipynb`. Cada día (2.038, de 2021 a jul-2026) se describe con sus 24 demandas horarias divididas por el promedio del día, para agrupar por **forma** de la curva y no por nivel. El tipo de día, el mes y la temperatura no entran al clustering: se usan después para interpretar.
+**Sesgos del modelo**
 
-**K-means (k = 4)**, con k elegido por codo y silueta. Encuentra cuatro perfiles de carga con sentido físico:
+- **Sesgo geográfico.** El modelo pronostica la demanda de todo el país con la temperatura de **una sola ciudad**, Buenos Aires. Funciona porque GBA, Buenos Aires y el Litoral son el 61 % de la demanda, pero el modelo "ve" el clima de la región pampeana y no el del NEA, el NOA o la Patagonia. Una ola de calor en el norte que no llegue a Buenos Aires puede quedar subestimada.
+- **Errores asimétricos en el lugar más caro.** El modelo se queda corto en los máximos diarios (en el 59 % de los días del test y en el 74 % de agosto de 2026). Para un operador, quedarse corto en el pico es el error más costoso, porque puede dejar al sistema con menos reserva de la necesaria. El error promedio bajo esconde esa asimetría.
+- **Sesgo temporal.** El modelo aprende el nivel de demanda de los años de entrenamiento, que incluyen la recuperación pospandemia y la recesión de 2024. Si cambia el nivel de actividad económica, el modelo se desajusta hasta que se reentrena: subestimó un 2,4 % en 2026.
+- **Calendario simplificado.** Hábil / no hábil no distingue vísperas, puentes ni vacaciones de verano, y el clustering mostró que los días hábiles de enero se comportan como fines de semana. En la API, además, los feriados futuros los tiene que indicar el usuario: si se olvida, el día se pronostica como hábil.
 
-| Grupo | Días | Forma de la curva |
-|---|---|---|
-| Hábil de invierno | 847 | Dos picos: mañana (~11 h) y noche (~20 h) |
-| Hábil de verano | 480 | Pico de tarde (14–16 h), por el aire acondicionado |
-| No hábil de invierno | 428 | Sin pico de mañana; pico de noche muy marcado |
-| No hábil de verano | 283 | La más plana; incluye días hábiles de vacaciones de enero y febrero |
+**Límites de los datos**
 
-- **PCA:** dos componentes explican el 79 % de la variación. Una es el "pico de la tarde" (eje verano ↔ invierno) y la otra la "madrugada alta, mañana baja" (eje no hábil ↔ hábil).
-- **Los grupos los marca más la temperatura que el calendario:** los meses de transición se reparten según haga calor o no.
-- **DBSCAN** no encuentra grupos separados: los días forman un continuo (silueta de K-means ~0,37). Usado como detector de anomalías, marca un 4 % de días atípicos: fiestas de fin de año, carnavales, Semana Santa, días de calor extremo y el **apagón del 1/3/2023**, que detectó sin información externa.
+- La temperatura es la de un **modelo meteorológico** (ECMWF IFS), no mediciones de estaciones.
+- Las fuentes oficiales también tienen errores y revisiones. La planilla horaria de CAMMESA traía 4 días con el tipo de día mal etiquetado, y CAMMESA revisó los datos de junio de 2026 después de publicarlos. Por eso cada dato se valida contra otra fuente antes de usarlo.
+- Los supuestos sobre **cuándo** se conoce cada dato (hora de emisión, demoras de publicación) son razonables y están documentados, pero no son el procedimiento oficial de CAMMESA.
+
+**Qué es y qué no es este modelo**
+
+- Es un **insumo** para planificar, no una herramienta de despacho. No conoce la oferta (centrales disponibles, mantenimientos, importaciones), los precios ni las fallas de la red, como el apagón de 2023.
+- Describe **asociaciones** entre la demanda, el calendario y el clima. No dice qué *causa* la demanda.
+- La banda del 80 % cuantifica la incertidumbre del pronóstico, pero **no es la reserva** que necesita el sistema, y no está bien calibrada en todos los meses.
+
+**Uso responsable**
+
+- **Transparencia en el punto de uso.** La API devuelve en cada respuesta las advertencias principales: que la banda falla en algunos meses, que un feriado no indicado se toma como hábil y que una temperatura fuera del rango de entrenamiento hace menos confiable el pronóstico.
+- **Una persona decide.** El pronóstico tiene que pasar por alguien que conozca el sistema, sobre todo en los días atípicos (fiestas, feriados largos, olas de calor), donde el modelo es menos confiable.
+- **Evaluación honesta.** Las métricas se reportan aunque empeoren. La evaluación en un período nuevo se pre-registró antes de ver los datos, y la desviación que hubo quedó documentada. Cuando una revisión encontró una afirmación exagerada, la corregimos en lugar de defenderla.
+- **Datos.** Se usaron solo datos públicos y agregados (demanda total del país y temperatura). No hay datos personales.
+- **Impacto.** La motivación del proyecto es ambiental y económica: un mejor pronóstico permite mantener menos reserva térmica encendida "por las dudas". Pero un pronóstico demasiado optimista tiene el efecto contrario, y por eso la subestimación de los picos es la limitación más importante.
+
+## Uso de IA en el proyecto
+
+El trabajo se hizo con dos asistentes de IA, con roles complementarios, y con las decisiones y la validación a cargo del equipo.
+
+| Quién | Rol |
+|---|---|
+| **Juan Serrano y Rodrigo Duarte** | Elección del problema y de las fuentes. **Todas las decisiones de diseño**: cada una se planteó como opciones con sus ventajas y desventajas, y la eligió el equipo (separación de train y test, modelo sin demanda pasada, cómo tratar la tendencia, qué incluir en la API). Rodrigo armó la primera versión del dataset regional con los datos del SMN y confirmó con el diccionario de datos del SMN el tratamiento de la precipitación. Revisión de cada entrega e incorporación de las devoluciones de la tutora. |
+| **Claude (Claude Code, de Anthropic)** | Asistente de programación y ejecución: escribió y ejecutó los scripts y notebooks, bajó y validó los datos, propuso las opciones de diseño, explicó cada decisión y aplicó las correcciones de las revisiones. Al verificar los datos corrigió el error de lectura del archivo del SMN que corría columnas, amplió de 2 a 4 los días mal etiquetados de CAMMESA que había señalado una auditoría y detectó que la temperatura histórica era de ECMWF IFS y no de ERA5. |
+| **ChatGPT (OpenAI)** | Ideas y revisión crítica: propuestas de mejora y dos **auditorías** completas del repositorio. La primera señaló, entre otras cosas, que el pronóstico del tiempo no correspondía a un único momento de emisión. La segunda, que el reentrenamiento usaba datos posteriores a la emisión. |
+
+**Cómo se complementaron.** Un asistente construía y el otro revisaba. Ninguna observación de una auditoría se aplicó sin verificarla antes contra los datos: algunas se confirmaron, otras se matizaron, y en un caso la verificación encontró algo distinto de lo que decía la auditoría (la serie de temperatura no era ERA5, como suponía la revisión, sino ECMWF IFS).
+
+**Lo que aprendimos del uso de IA.** Los asistentes también se equivocan, y sus errores suenan convincentes. Durante el trabajo aparecieron afirmaciones demasiado fuertes, como que el ancho de la banda era "la reserva necesaria", que los árboles "no pueden" predecir valores altos o que un WAPE parecido al MAPE probaba un buen desempeño en los picos. También apareció un ejemplo mal elegido: un feriado presentado como día hábil. Todas se detectaron con revisión cruzada y verificación con los datos. La práctica que nos quedó: cada número del README sale de una ejecución, cada afirmación se contrasta con un gráfico o una tabla, y las reglas de evaluación se fijan antes de ver los resultados.
 
 ## Integrantes
 
