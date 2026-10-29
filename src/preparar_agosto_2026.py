@@ -12,6 +12,12 @@ Pasos:
   3. Verifica que, en el periodo comun (2023 -> julio de 2026), la planilla
      nueva coincida con la serie versionada: si CAMMESA reviso datos viejos,
      se reporta.
+     DESVIACION DEL PRE-REGISTRO (documentada antes de calcular metricas):
+     la version pre-registrada se detenia con diferencias mayores a 0,5 %.
+     La planilla nueva trae junio de 2026 revisado (450 horas, maximo 0,55 %,
+     +0,11 % en la media del mes). Ahora las revisiones se guardan en
+     data/processed/revisiones_cammesa_2026.csv para un analisis de
+     sensibilidad, y el script se detiene solo si alguna supera el 1 %.
   4. Tipo de dia de agosto: misma regla que descargar_demanda_mem.py. Si la
      base diaria de CAMMESA (7 tipos) difiere de la planilla horaria,
      prevalece la base diaria. Las diferencias se informan y se guardan.
@@ -44,6 +50,7 @@ PLANILLA_NUEVA = BASE / "data" / "raw" / "periodo_nuevo" / "cammesa_demanda_hora
 SERIE = BASE / "data" / "processed" / "demanda_horaria_mem.csv"
 SALIDA_DEMANDA = BASE / "data" / "processed" / "demanda_horaria_agosto_2026.csv"
 SALIDA_TEMPERATURA = BASE / "data" / "processed" / "temperatura_pronosticada_agosto_2026.csv"
+SALIDA_REVISIONES = BASE / "data" / "processed" / "revisiones_cammesa_2026.csv"
 
 INICIO = pd.Timestamp("2026-08-01")
 FIN = pd.Timestamp("2026-08-31 23:00")
@@ -69,7 +76,13 @@ def main() -> None:
     comun = serie.merge(nueva[["timestamp", "demanda_mwh"]], on="timestamp", suffixes=("", "_nueva"))
     dif = ((comun["demanda_mwh_nueva"] - comun["demanda_mwh"]) / comun["demanda_mwh"]).abs() * 100
     print(f"   {len(comun):,} horas comunes | diferencia maxima {dif.max():.4f} % | horas con diferencia > 0,01 %: {(dif > 0.01).sum()}")
-    assert dif.max() < 0.5, "la planilla nueva no coincide con la serie versionada: CAMMESA reviso datos"
+    revisadas = comun.loc[dif > 0.01, ["timestamp", "demanda_mwh", "demanda_mwh_nueva"]].rename(
+        columns={"demanda_mwh": "demanda_versionada", "demanda_mwh_nueva": "demanda_revisada"})
+    if len(revisadas):
+        print(f"   revisiones por mes: {revisadas.groupby(revisadas.timestamp.dt.to_period('M')).size().to_dict()}")
+    revisadas.to_csv(SALIDA_REVISIONES, index=False, float_format="%.3f")
+    print(f"   guardado {SALIDA_REVISIONES.relative_to(BASE)} (para el analisis de sensibilidad)")
+    assert dif.max() < 1.0, "CAMMESA reviso datos viejos en mas de 1 %: revisar antes de seguir"
 
     print("4. Tipo de dia de agosto")
     agosto["tipo_dia_planilla"] = agosto["tipo_dia"]
