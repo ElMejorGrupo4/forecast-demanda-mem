@@ -1,0 +1,19 @@
+{
+  "fuente": "https://archive-api.open-meteo.com/v1/archive",
+  "documentacion": "https://open-meteo.com/en/docs/historical-weather-api",
+  "parametros": {
+    "latitude": -34.56,
+    "longitude": -58.42,
+    "start_date": "2021-01-01",
+    "end_date": "2026-07-31",
+    "hourly": "temperature_2m",
+    "models": "ecmwf_ifs",
+    "timezone": "America/Argentina/Buenos_Aires"
+  },
+  "punto_de_grilla_devuelto": [
+    -34.551846,
+    -58.448944
+  ],
+  "disponibilidad_supuesta": "valor de la hora t disponible a las t + 12 h (actualizacion cada 6 h sin demora, segun Open-Meteo)",
+  "descargado_utc": "2026-10-28 14:44"
+}

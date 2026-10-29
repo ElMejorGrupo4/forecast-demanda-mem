@@ -1,0 +1,5 @@
+fecha,dia_semana,tipo_dia_planilla_horaria,tipo_dia_corregido,clasificacion_cammesa_7_tipos,fuentes,motivo
+2023-04-06,jueves,habil,no_habil,Sabado o Semilaborable,planilla regional horaria y base diaria,Jueves Santo (dia no laborable)
+2023-04-07,viernes,habil,no_habil,Domingo o Feriado,planilla regional horaria y base diaria,Viernes Santo (feriado)
+2026-03-23,lunes,habil,no_habil,Sabado o Semilaborable,base diaria,dia no laborable puente previo al 24 de marzo
+2026-07-10,viernes,habil,no_habil,Sabado o Semilaborable,base diaria,dia no laborable puente posterior al 9 de julio
