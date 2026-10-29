@@ -75,14 +75,17 @@ forecast-demanda-mem/
 ├── notebooks/        # numerados por etapa
 │   ├── 01_eda_inicial.ipynb          # EDA (pre-entrega 2)
 │   ├── 02_modelo_supervisado.ipynb   # regresión y clasificación (pre-entrega 3, ampliado en la 4)
-│   └── 03_clustering.ipynb           # días típicos y días atípicos: K-means, DBSCAN, PCA (pre-entrega 4)
+│   ├── 03_clustering.ipynb           # días típicos y días atípicos: K-means, DBSCAN, PCA (pre-entrega 4)
+│   └── 04_evaluacion_agosto_2026.ipynb  # evaluación pre-registrada en un mes que no se usó
 ├── reports/
 │   └── figures/      # gráficos exportados por los notebooks
 └── src/
     ├── descargar_demanda_mem.py   # baja las planillas CAMMESA y arma la serie 2021-2026
     ├── descargar_temperatura.py   # baja la temperatura horaria histórica de Buenos Aires, ECMWF IFS (Open-Meteo)
     ├── descargar_temperatura_pronosticada.py  # baja la corrida de ECMWF disponible al emitir cada día del test (Open-Meteo)
-    └── construir_dataset_regional.py  # arma el dataset regional diario con clima (CAMMESA + SMN)
+    ├── construir_dataset_regional.py  # arma el dataset regional diario con clima (CAMMESA + SMN)
+    ├── modelo_demanda.py          # reglas y modelos fijados del notebook 02 (los usa el notebook 04)
+    └── preparar_agosto_2026.py    # prepara los datos de agosto de 2026 para la evaluación nueva
 ```
 
 ## Cómo reproducir
@@ -96,6 +99,8 @@ python src/descargar_temperatura_pronosticada.py  # genera data/processed/temper
 jupyter notebook notebooks/01_eda_inicial.ipynb
 jupyter notebook notebooks/02_modelo_supervisado.ipynb
 jupyter notebook notebooks/03_clustering.ipynb
+python src/preparar_agosto_2026.py        # necesita la planilla actualizada de CAMMESA en data/raw/periodo_nuevo/
+jupyter notebook notebooks/04_evaluacion_agosto_2026.ipynb
 ```
 
 `data/raw/` no se versiona en git (archivos pesados). `descargar_demanda_mem.py` baja sus planillas solo; para `construir_dataset_regional.py` hay que descargar los tres archivos crudos de las fuentes de arriba y copiarlos en `data/raw/` con esos nombres.
@@ -154,7 +159,7 @@ Clasificación de **horas de demanda alta** (sobre el percentil 90 de train): el
 - **Una sola ciudad.** La temperatura de Buenos Aires no captura las olas de calor nacionales.
 - **Calendario binario.** Hábil / no hábil no distingue vísperas, puentes ni vacaciones.
 - **Intervalos.** Hay subcobertura en meses puntuales: febrero, junio y noviembre de 2025 y enero y julio de 2026 quedan por debajo del 75 %.
-- **Período de test reutilizado.** Las revisiones se evaluaron sobre el mismo período de test; una confirmación independiente necesita meses posteriores a julio de 2026.
+- **Período de test reutilizado.** Las revisiones se evaluaron sobre el mismo período de test. Agosto de 2026, evaluado con un protocolo pre-registrado (notebook 04), confirma el orden de los modelos y el nivel de error, pero es un solo mes de invierno.
 
 ### Revisión antes de la entrega final
 
@@ -179,6 +184,29 @@ Una revisión crítica del trabajo encontró errores y afirmaciones demasiado fu
 | La ventana de calibración de los intervalos estaba fijada a mano | Se elige con validación en 2024 entre 3, 6 y 12 meses y un ajuste por hora del día |
 | Se afirmaba que los árboles no pueden predecir por encima del máximo de entrenamiento | Vale para el Random Forest, no para el Gradient Boosting; se mide qué pasa en este proyecto |
 | El error meteorológico se atribuía a la anticipación, y el modelo de calendario y clima se presentaba como "explicativo" | Se aclara que anticipación, hora y estación van juntas, y que los modelos describen asociaciones, no causas |
+
+## Evaluación en un período nuevo: agosto de 2026
+
+Notebook `04_evaluacion_agosto_2026.ipynb`. El período de test del notebook 02 se usó varias veces durante las revisiones, así que dejó de ser una medición independiente. Agosto de 2026 no se había usado en ningún paso.
+
+**Protocolo.**
+
+- **Pre-registro:** antes de descargar la demanda de agosto se guardó un commit (`40e41df`) que fija los hiperparámetros, las variables, el reentrenamiento (24 meses, al corte del 31/07 a las 11:00), la calibración (3 meses) y las métricas a reportar.
+- **Control previo:** el código fijado (`src/modelo_demanda.py`) reproduce exactamente los resultados del notebook 02 en el test conocido.
+- **Desviación documentada:** CAMMESA revisó junio de 2026 (+0,11 % en la media del mes) y el control de datos se detuvo. Antes de calcular métricas se documentó la desviación en otro commit y se declaró un análisis de sensibilidad. El resultado principal usa el historial versionado.
+
+| Modelo | MAPE agosto 2026 | MAPE agosto 2025 (ya examinado) | MAPE test completo (ya examinado) |
+|---|---|---|---|
+| Referencia: misma hora semana anterior | 9,3 % | — | 9,1 % |
+| Referencia: perfil promedio | 7,6 % | — | 7,6 % |
+| Gradient Boosting fijo | 4,3 % | 3,2 % | 4,1 % |
+| Gradient Boosting reentrenado (24 meses) | 4,0 % | 3,2 % | 4,1 % |
+| Variante con demanda de hace 48 h y 168 h | 3,3 % | 2,8 % | 3,6 % |
+
+- **Se confirma:** el orden de los modelos se mantiene, y el error queda en el rango del test. Es la primera evidencia independiente de la variante con demanda reciente.
+- **Empeora o falla:** el error es más alto que en agosto de 2025, y todos los modelos subestiman (el reentrenado, 436 MWh en promedio). La **banda del 80 % cubre solo el 72,4 %** de las horas, con la demanda por encima el 26 % del tiempo: la subcobertura de los intervalos se repite en un mes nuevo.
+- **Sensibilidad:** con junio revisado, el MAPE no cambia (3,98 %) y la cobertura pasa a 74,2 %.
+- **Alcance:** es un solo mes de invierno. No valida el desempeño en verano ni en olas de calor, ni la calibración de la banda.
 
 ## Clustering: días típicos y atípicos (pre-entrega 4)
 
