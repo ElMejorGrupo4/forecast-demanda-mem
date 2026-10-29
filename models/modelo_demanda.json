@@ -1,0 +1,65 @@
+{
+  "modelo": "Gradient Boosting de calendario y clima (HistGradientBoostingRegressor)",
+  "variables": [
+    "hora",
+    "dia_semana",
+    "mes",
+    "es_habil",
+    "temperatura_c",
+    "temp_24h",
+    "hdd",
+    "cdd"
+  ],
+  "hiperparametros": {
+    "min_samples_leaf": 100,
+    "max_iter": 200,
+    "max_depth": 10,
+    "learning_rate": 0.05,
+    "l2_regularization": 1.0,
+    "early_stopping": false,
+    "random_state": 42
+  },
+  "temperatura_de_confort_c": 18,
+  "rango_temperatura_entrenamiento_c": [
+    -0.8,
+    38.6
+  ],
+  "datos_de_entrenamiento": {
+    "desde": "2024-08-01 00:00:00",
+    "hasta": "2026-07-30 22:00:00",
+    "horas": 17495,
+    "regla": "últimos 24 meses disponibles al corte de la emisión del 2026-08-01"
+  },
+  "banda": {
+    "nivel": 0.8,
+    "cuantiles": [
+      0.1,
+      0.9
+    ],
+    "ajuste_conformal_mw": 233.9,
+    "calibracion": "percentil 80 de los puntajes de los últimos 3 meses conocidos al corte"
+  },
+  "metricas": {
+    "agosto_2026_periodo_nuevo": {
+      "MAPE_%": 3.98,
+      "WAPE_%": 4.06,
+      "cobertura_banda_%": 72.4,
+      "fuente": "notebook 04 (evaluación pre-registrada)"
+    },
+    "test_ene2025_jul2026": {
+      "MAPE_%": 4.08,
+      "WAPE_%": 4.18,
+      "cobertura_banda_%": 79.1,
+      "fuente": "notebook 02 (test reutilizado en las revisiones)"
+    }
+  },
+  "temperatura": "Open-Meteo, modelo ECMWF IFS 9 km, coordenadas de Aeroparque (-34.56, -58.42)",
+  "advertencias": [
+    "La banda del 80 % no está bien calibrada en todos los meses: en agosto de 2026 cubrió el 72 % de las horas y en el test hubo 5 de 19 meses por debajo del 75 %.",
+    "El modelo tiende a quedarse corto en los máximos diarios y en las horas de demanda alta.",
+    "Describe asociaciones entre demanda, calendario y temperatura; no relaciones causales.",
+    "Usa la temperatura de una sola ciudad (Buenos Aires) para la demanda de todo el país."
+  ],
+  "version_scikit_learn": "1.9.0",
+  "entrenado_utc": "2026-10-29 04:41"
+}
