@@ -1,14 +1,29 @@
-pandas>=2.2
-numpy>=1.26
-openpyxl>=3.1
-requests>=2.31
-matplotlib>=3.8
-seaborn>=0.13
-scikit-learn>=1.4
-jupyter
-python-calamine>=0.2
-joblib>=1.3
-fastapi>=0.110
-uvicorn>=0.29
-httpx>=0.27
-pytest>=8
+# Entorno fijado (Python 3.12.6). Son las versiones con las que se generaron los snapshots de
+# models/ y se ejecutaron los notebooks. La API verifica al arrancar que scikit-learn coincida
+# con la versión registrada en los metadatos del snapshot.
+
+# datos y modelos
+pandas==3.0.3
+numpy==2.5.1
+scikit-learn==1.9.0
+scipy==1.18.1
+joblib==1.5.3
+requests==2.34.2
+openpyxl==3.1.5
+python-calamine==0.8.2
+
+# notebooks y gráficos
+matplotlib==3.11.1
+seaborn==0.13.2
+jupyter==1.1.1
+nbconvert==7.17.1
+
+# API
+fastapi==0.141.1
+starlette==1.3.1
+pydantic==2.13.4
+uvicorn==0.51.0
+
+# pruebas
+httpx==0.28.1
+pytest==9.2.0

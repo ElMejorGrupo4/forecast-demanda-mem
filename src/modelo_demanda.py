@@ -88,12 +88,59 @@ def armar_variables(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+HORAS_PREVIAS = 23   # horas del dia anterior que necesita la ventana de 24 h de la primera hora del dia
+
+
+def horas_con_historial(dia) -> pd.DatetimeIndex:
+    """Las 47 horas que hacen falta para el clima del dia: D-1 01:00 -> D 23:00."""
+    dia = pd.Timestamp(dia)
+    return pd.date_range(dia - pd.Timedelta(hours=HORAS_PREVIAS), dia + pd.Timedelta(hours=23), freq="h")
+
+
+def clima_del_dia(temperaturas: pd.Series, dia, historial_completo: bool = True) -> pd.DataFrame:
+    """Variables climaticas de las 24 horas del dia `dia`. Es la regla unica que usan la evaluacion y la API.
+
+    historial_completo=True (el modo evaluado): `temperaturas` tiene que cubrir, sin huecos ni duplicados,
+    las 47 horas de D-1 01:00 a D 23:00. Asi todas las ventanas de 24 h estan completas.
+    historial_completo=False (simulacion aproximada, no evaluada): `temperaturas` trae solo las 24 horas
+    de D; el promedio de 24 h de las primeras horas usa solo las horas del dia. No se inventan temperaturas.
+    """
+    dia = pd.Timestamp(dia)
+    if not temperaturas.index.is_unique:
+        raise ValueError("hay horas repetidas en las temperaturas")
+    if historial_completo:
+        necesarias = horas_con_historial(dia)
+        faltan = necesarias.difference(temperaturas.index)
+        if len(faltan):
+            raise ValueError(f"faltan {len(faltan)} horas para el historial completo (desde {faltan[0]})")
+        serie = temperaturas.reindex(necesarias)
+    else:
+        serie = temperaturas.reindex(pd.date_range(dia, periods=24, freq="h"))
+    if serie.isna().any():
+        raise ValueError("hay temperaturas faltantes")
+    return variables_temperatura(serie).loc[dia:]
+
+
+def banda_80(central, q10, q90, ajuste: float):
+    """Regla unica de la banda del 80 % (nivel nominal) que se evalua y se sirve.
+
+    1. Cuantiles 10 y 90 ampliados por el ajuste conformal.
+    2. Los modelos de los cuantiles y el central se entrenan por separado y pueden cruzarse: si la banda no
+       contiene al valor central, se extiende hasta el. Una banda que no contiene su propio pronostico no
+       se puede comunicar; el efecto sobre la cobertura se mide en el notebook 04.
+    """
+    central = np.asarray(central, dtype=float)
+    inferior = np.minimum(np.asarray(q10, dtype=float) - ajuste, central)
+    superior = np.maximum(np.asarray(q90, dtype=float) + ajuste, central)
+    return inferior, superior
+
+
 def clima_al_emitir(pronostico: pd.DataFrame) -> pd.DataFrame:
     """Variables climaticas de cada dia con las corridas disponibles al emitir (47 horas por dia -> 24)."""
     partes = []
     for dia, pron_dia in pronostico.groupby("dia_objetivo"):
         pron_dia = pron_dia.set_index("timestamp")
-        clima_dia = variables_temperatura(pron_dia["temperatura_pron_c"]).loc[dia:]
+        clima_dia = clima_del_dia(pron_dia["temperatura_pron_c"], dia)
         clima_dia["horas_desde_emision"] = pron_dia.loc[dia:, "horas_desde_emision"]
         partes.append(clima_dia)
     disponible = pd.to_datetime(pronostico["disponible_supuesta_utc"]) - pd.Timedelta(hours=3)

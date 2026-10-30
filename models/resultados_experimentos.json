@@ -1,0 +1,42 @@
+{
+  "_descripcion": "Resultados de experimentos atados a un artefacto concreto. La API solo los muestra si el sha256 del modelo cargado coincide. Las métricas no se trasladan a modelos regenerados con otros datos.",
+  "gb_calendario_clima_2026-08-01": {
+    "artefacto_sha256": "1893f0e816c4ab800035e141ddd93d1577b77cfdb32e579ccb058969f9c6beff",
+    "experimentos": [
+      {
+        "nombre": "Evaluación pre-registrada en un período nuevo",
+        "periodo": "2026-08-01 -> 2026-08-31",
+        "fuente": "notebooks/04_evaluacion_agosto_2026.ipynb",
+        "commits": {
+          "pre_registro": "40e41df",
+          "desviacion_documentada": "9b4612c",
+          "resultados": "758f093"
+        },
+        "metricas": {
+          "MAPE_%": 3.98,
+          "WAPE_%": 4.06,
+          "sesgo_MWh": 436,
+          "banda_nivel_nominal_%": 80,
+          "banda_cobertura_empirica_%": 72.45,
+          "banda_servida_cobertura_empirica_%": 72.45,
+          "banda_servida_horas_extendidas": 3
+        },
+        "alcance": "Un solo mes de invierno; temperatura de corridas de ECMWF disponibles al emitir (D-1 12:00). Es el único experimento sobre este artefacto exacto."
+      },
+      {
+        "nombre": "Test del notebook 02 con la misma regla de reentrenamiento (otro modelo por mes)",
+        "periodo": "2025-01-01 -> 2026-07-31",
+        "fuente": "notebooks/02_modelo_supervisado.ipynb y anexo del notebook 04",
+        "metricas": {
+          "MAPE_%": 4.08,
+          "WAPE_%": 4.18,
+          "banda_nivel_nominal_%": 80,
+          "banda_cobertura_empirica_%": 79.07,
+          "banda_servida_cobertura_empirica_%": 79.09,
+          "meses_con_cobertura_menor_al_75_%": "5 de 19"
+        },
+        "alcance": "Métricas del procedimiento (un modelo reentrenado por mes), no de este artefacto. Período de test reutilizado en varias revisiones."
+      }
+    ]
+  }
+}

@@ -82,7 +82,9 @@ forecast-demanda-mem/
 ├── requirements.txt
 ├── api/
 │   └── main.py       # API con FastAPI que sirve el modelo
-├── models/           # modelo entrenado que carga la API (+ metadatos)
+├── models/
+│   ├── gb_calendario_clima_2026-08-01/   # snapshot evaluado en agosto de 2026: modelo.joblib + metadatos.json
+│   └── resultados_experimentos.json       # métricas atadas a la huella sha256 de cada artefacto
 ├── tests/
 │   └── test_api.py   # pruebas automáticas de la API
 ├── data/
@@ -102,14 +104,14 @@ forecast-demanda-mem/
     ├── descargar_temperatura_pronosticada.py  # baja la corrida de ECMWF disponible al emitir cada día del test (Open-Meteo)
     ├── construir_dataset_regional.py  # arma el dataset regional diario con clima (CAMMESA + SMN)
     ├── modelo_demanda.py          # reglas y modelos fijados del notebook 02 (los usan el notebook 04 y la API)
-    ├── entrenar_modelo.py         # entrena y guarda el modelo que sirve la API
+    ├── entrenar_modelo.py         # entrena un snapshot para una fecha objetivo (nunca sobrescribe)
     └── preparar_agosto_2026.py    # prepara los datos de agosto de 2026 para la evaluación nueva
 ```
 
 ## Cómo reproducir
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt            # entorno fijado (Python 3.12)
 python src/descargar_demanda_mem.py        # genera data/processed/demanda_horaria_mem.csv (--actualizar para bajar meses nuevos)
 python src/construir_dataset_regional.py   # genera data/processed/dataset_demanda_por_region.csv
 python src/descargar_temperatura.py        # genera data/processed/temperatura_horaria_ba.csv
@@ -119,8 +121,8 @@ jupyter notebook notebooks/02_modelo_supervisado.ipynb
 jupyter notebook notebooks/03_clustering.ipynb
 python src/preparar_agosto_2026.py        # necesita la planilla actualizada de CAMMESA en data/raw/periodo_nuevo/
 jupyter notebook notebooks/04_evaluacion_agosto_2026.ipynb
-python src/entrenar_modelo.py             # genera models/modelo_demanda.joblib y .json
-python -m pytest tests                    # pruebas de la API
+python src/entrenar_modelo.py --fecha-objetivo 2026-08-01 --destino <carpeta>   # reproduce el snapshot (mismo sha256)
+python -m pytest tests                    # pruebas de la API, el módulo y el entrenamiento (sin internet)
 uvicorn api.main:app --reload             # levanta la API: documentación en http://127.0.0.1:8000/docs
 ```
 
@@ -248,30 +250,72 @@ Notebook `03_clustering.ipynb`. Cada día (2.038, de 2021 a jul-2026) se describ
 
 ## Diseño de la API (FastAPI)
 
-`api/main.py` sirve el modelo de calendario y clima para pronosticar las 24 horas de un día.
+`api/main.py` sirve un **snapshot** del modelo de calendario y clima para pronosticar las 24 horas de un día. Por defecto carga `gb_calendario_clima_2026-08-01`, el modelo evaluado en agosto de 2026 en el notebook 04. Con la variable de entorno `MODELO_ID` se puede elegir otro snapshot.
 
 | Endpoint | Qué hace |
 |---|---|
-| `GET /salud` | Estado de la API |
-| `GET /modelo` | Metadatos del modelo: variables, hiperparámetros, datos de entrenamiento, ajuste de la banda, métricas y advertencias |
-| `POST /pronostico` | Pronóstico de un día: demanda de cada hora, banda del 80 % y resumen (media, máximo, hora del máximo, energía del día) |
+| `GET /salud` | Estado de la API y snapshot cargado |
+| `GET /modelo` | Metadatos del snapshot (configuración, datos usados con su huella, entorno, corte de información), su antigüedad y los resultados de experimentos registrados **para ese artefacto exacto** |
+| `POST /pronostico` | Pronóstico de un día: demanda de cada hora, banda de nivel nominal 80 %, resumen, bloque `alcance` y advertencias |
 
-Ejemplo de pedido:
+**Modos de `POST /pronostico`**
 
-```json
-{"fecha": "2026-10-30", "es_feriado": false}
-```
+| Modo | Pedido | Historial térmico | Relación con la evaluación |
+|---|---|---|---|
+| Pronóstico actual | `{"fecha": "2026-11-05"}` | Completo: la API consulta el pronóstico de ECMWF IFS en Open-Meteo para el día pedido y el anterior | Mismas variables y modelo, pero con el pronóstico disponible **al momento de la consulta**. Open-Meteo no informa la corrida usada |
+| Simulación manual | `temperaturas` (24) + `temperaturas_dia_anterior` (24) | Completo: el modo evaluado | Mismas variables y banda; el error depende de las temperaturas dadas |
+| Simulación aproximada | `temperaturas` (24) + `"historial_incompleto": true` | **Incompleto**: el promedio de 24 h de las primeras horas usa solo horas del día | **No validada** por las métricas publicadas; la respuesta lo indica |
 
-Si el pedido no trae temperaturas, la API baja el pronóstico de **ECMWF IFS** de Open-Meteo para ese día y el anterior, el mismo modelo meteorológico del entrenamiento. Open-Meteo lo ofrece desde unos 3 meses atrás hasta unos 15 días adelante. También se pueden mandar las 24 temperaturas (`temperaturas`, y opcionalmente `temperaturas_dia_anterior`), para simular escenarios ("¿y si mañana hacen 38 °C?") o usar la API sin internet.
+Si se mandan temperaturas sin las del día anterior y sin `historial_incompleto: true`, el pedido se rechaza (422): no se completan ni se inventan temperaturas.
 
-**Decisiones de diseño:**
+**Bloque `alcance` de cada respuesta**
 
-- **Modelo servido.** Es el Gradient Boosting de calendario y clima. Solo necesita la fecha y la temperatura, a diferencia de la variante con rezagos, que exigiría mandar 48 valores de demanda pasada.
-- **Entrenamiento separado.** `src/entrenar_modelo.py` entrena con las reglas fijadas (`src/modelo_demanda.py`): los últimos 24 meses disponibles al corte del 31/07/2026. Es el mismo modelo evaluado en agosto de 2026 (MAPE 3,98 %). La API solo carga el archivo; no entrena al arrancar.
-- **Tipo de día.** Sábados y domingos son no hábiles. Los feriados los indica el usuario con `es_feriado`, porque no hay un calendario oficial de CAMMESA para fechas futuras.
-- **Banda del 80 %.** Sale de los cuantiles 10 y 90 con el ajuste conformal (234 MW). Cada respuesta incluye la advertencia de que la banda no está bien calibrada en todos los meses (72 % de cobertura en agosto de 2026).
-- **Validaciones.** El pedido se rechaza si no trae 24 temperaturas o si alguna es imposible (fuera de −20 a 50 °C). Si las temperaturas salen del rango visto en el entrenamiento, la respuesta lo advierte.
-- **Pruebas.** `tests/test_api.py` cubre los endpoints, los tipos de día, las validaciones, la consulta a Open-Meteo y su falla (sin depender de internet), y que la API arme las mismas variables que el pipeline evaluado.
+- `modo` e `historial_termico`.
+- `consultado_en`: momento de la consulta, con zona horaria.
+- `horizonte_horas`: horas entre la consulta y la primera y la última hora pedidas (solo en el pronóstico actual).
+- `fecha_pasada`: si la fecha ya pasó. En ese caso, una consulta a Open-Meteo **no es un backtesting**, porque devuelve el mejor dato de hoy, no el pronóstico de entonces. Para eso está el notebook 04.
+- `fuente_meteorologica`: proveedor, modelo y corrida. La corrida queda vacía cuando el proveedor no la informa; no se inventa.
+- `banda`: nivel nominal y regla.
+- `relacion_con_la_evaluacion`: qué tan comparable es la respuesta con la evaluación publicada.
+- `modelo`: snapshot, corte de información, último dato de entrenamiento, **antigüedad del corte** y huella del artefacto.
+
+**Errores**
+
+| Código | Cuándo |
+|---|---|
+| 422 | Pedido inválido: fecha mal escrita, cantidad de temperaturas, valores imposibles, combinación de campos o fecha fuera del rango del pronóstico de Open-Meteo |
+| 502 | Open-Meteo respondió algo inválido: no es JSON, falta la estructura, longitudes distintas, horas duplicadas, desordenadas o de otra fecha, otra zona horaria, temperaturas nulas, no numéricas o imposibles |
+| 503 | Open-Meteo no responde, está caído o limita los pedidos |
+
+**Decisiones de diseño**
+
+- **Modelo servido.** El Gradient Boosting de calendario y clima. Solo necesita la fecha y la temperatura; la variante con rezagos exigiría mandar 48 valores de demanda pasada.
+- **Reglas únicas.** El clima de un día (`md.clima_del_dia`) y la banda (`md.banda_80`) salen del mismo módulo que usa la evaluación. Hay pruebas que verifican que, con las mismas temperaturas históricas, la API devuelve exactamente el valor central y los extremos del pipeline evaluado.
+- **Banda.** Cuantiles 10 y 90 con el ajuste conformal (234 MW). Si los modelos se cruzan y la banda no contiene al valor central, se extiende hasta él. Esa extensión cambia 3 horas de agosto de 2026 y 44 del test, sin cambiar la cobertura: 72,45 % y 79,09 %, medidas en el anexo del notebook 04. El **80 % es el nivel nominal**; la **cobertura empírica** fue menor en varios meses, y la API no la promete.
+- **Snapshots trazables.** `src/entrenar_modelo.py --fecha-objetivo AAAA-MM-DD` entrena con las reglas de disponibilidad: los últimos 24 meses conocidos al corte del día anterior a las 11:00. Antes de entrenar valida que los datos lleguen al corte y que haya pronósticos para calibrar; si no, se detiene y dice qué falta. Cada snapshot va a su propia carpeta, nunca sobrescribe otro y registra:
+  - la configuración;
+  - los datos usados, con su huella sha256;
+  - el entorno, el commit del código y la huella del artefacto.
+
+  Se verificó que el script reproduce byte a byte el snapshot evaluado.
+- **Métricas atadas al artefacto.** Están en `models/resultados_experimentos.json`, separadas del script de entrenamiento, con el experimento del que salen. La API las muestra solo si la huella del modelo cargado coincide: un snapshot nuevo no hereda métricas que no se le midieron.
+- **Antigüedad.** El snapshot evaluado se generó en octubre de 2026, pero su último dato de entrenamiento es del **30/07/2026 a las 22:00**. La API informa el corte y la antigüedad en cada respuesta, y avisa cuando supera los 30 días.
+- **Entorno.** `requirements.txt` fija las versiones exactas. La API se niega a arrancar si scikit-learn no coincide con la versión registrada en el snapshot, o si el archivo no coincide con su huella.
+- **Tipo de día.** Sábados y domingos son no hábiles; los feriados los indica el usuario con `es_feriado`.
+
+**Qué se comprobó y qué no**
+
+- **Localmente, con 46 pruebas automáticas (sin internet):**
+  - endpoints y modos;
+  - validaciones de pedido;
+  - respuestas inválidas y fallas de Open-Meteo, simuladas a nivel HTTP con la validación real;
+  - equivalencia con el pipeline evaluado;
+  - verificación de huella y de versión;
+  - validación de cobertura del entrenamiento.
+- **Con consultas reales a Open-Meteo:** un día futuro, uno pasado y uno fuera de rango.
+- **Qué no se comprobó:**
+  - el comportamiento en un despliegue (servidor público, concurrencia, disponibilidad);
+  - el desempeño de un snapshot nuevo hasta que se lo evalúe en un período posterior a su fecha objetivo.
 
 ## Reflexión: sesgos, límites y uso responsable
 
@@ -296,7 +340,7 @@ Si el pedido no trae temperaturas, la API baja el pronóstico de **ECMWF IFS** d
 
 **Uso responsable**
 
-- **Transparencia en el punto de uso.** La API devuelve en cada respuesta las advertencias principales: que la banda falla en algunos meses, que un feriado no indicado se toma como hábil y que una temperatura fuera del rango de entrenamiento hace menos confiable el pronóstico.
+- **Transparencia en el punto de uso.** Cada respuesta de la API incluye un bloque `alcance` con el modo, el historial térmico, la fuente meteorológica, la antigüedad del modelo y qué tan comparable es con la evaluación. También trae advertencias: que el 80 % de la banda es nominal y la cobertura real fue menor en algunos meses, que un feriado no indicado se toma como hábil, que una consulta sobre una fecha pasada no es un backtesting y que una temperatura fuera del rango de entrenamiento hace menos confiable el pronóstico.
 - **Una persona decide.** El pronóstico tiene que pasar por alguien que conozca el sistema, sobre todo en los días atípicos (fiestas, feriados largos, olas de calor), donde el modelo es menos confiable.
 - **Evaluación honesta.** Las métricas se reportan aunque empeoren. La evaluación en un período nuevo se pre-registró antes de ver los datos, y la desviación que hubo quedó documentada. Cuando una revisión encontró una afirmación exagerada, la corregimos en lugar de defenderla.
 - **Datos.** Se usaron solo datos públicos y agregados (demanda total del país y temperatura). No hay datos personales.
