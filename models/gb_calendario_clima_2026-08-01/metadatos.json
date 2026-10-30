@@ -76,7 +76,7 @@
   },
   "codigo": {
     "commit": "701f208432b0cb7f402e18549b04a2929c956ca5",
-    "nota": "entrenado originalmente con ese commit; en la revisión de la API se verificó que src/entrenar_modelo.py --fecha-objetivo 2026-08-01 lo reproduce byte a byte (mismo sha256)"
+    "nota": "entrenado originalmente con ese commit. Reproducción numérica (mismas predicciones) verificada; reproducción binaria (mismo sha256) verificada solo en el entorno original (Python 3.12.6, Windows, requirements.txt). En otro entorno el sha256 puede diferir aunque las predicciones coincidan; las métricas quedan atadas a este sha256."
   },
   "artefacto": {
     "archivo": "models/gb_calendario_clima_2026-08-01/modelo.joblib",

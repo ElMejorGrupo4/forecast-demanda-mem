@@ -24,9 +24,21 @@ Salidas:
     models/<id>/modelo.joblib      modelos central, q10 y q90
     models/<id>/metadatos.json     configuracion, datos usados (con huellas), entorno, corte y advertencias
 
+La fecha objetivo puede ser cualquier dia: si la ventana de calibracion empieza a mitad de
+mes, md.reentrenar_mensual cubre ese mes parcial con el modelo de su dia 1 y predice solo las
+filas pedidas. Si faltan predicciones o puntajes, el proceso se detiene.
+
+Reproducibilidad: hay dos niveles distintos.
+  - numerica: el modelo regenerado da exactamente las mismas predicciones;
+  - binaria: el archivo regenerado tiene el mismo sha256.
+La binaria se verifico solo en el entorno original (Python 3.12.6, Windows, requirements.txt).
+En otro entorno el sha256 puede cambiar aunque las predicciones sean identicas; por eso las
+metricas quedan atadas al sha256 del artefacto exacto que se evaluo. --comparar-con informa
+los dos niveles por separado.
+
 Uso:
     python src/entrenar_modelo.py --fecha-objetivo 2026-08-01
-    python src/entrenar_modelo.py --fecha-objetivo 2026-08-01 --destino <carpeta>   # p. ej. para verificar reproducibilidad
+    python src/entrenar_modelo.py --fecha-objetivo 2026-08-01 --destino <carpeta> --comparar-con gb_calendario_clima_2026-08-01
 """
 
 from __future__ import annotations
@@ -133,7 +145,23 @@ def entrenar(fecha: pd.Timestamp, df: pd.DataFrame, pron: pd.DataFrame):
     puntajes["puntaje"] = np.maximum(puntajes["q10"] - puntajes["real"], puntajes["real"] - puntajes["q90"])
     calibracion = pd.concat([puntajes, pd.DataFrame({"timestamp": [fecha]})], ignore_index=True)
     ajuste = float(md.calibrar(calibracion, [fecha]).iloc[-1])
-    return modelos, ajuste, df.loc[disponible, "timestamp"], X
+    return modelos, ajuste, df.loc[disponible, "timestamp"], X, X_prev
+
+
+def comparar_con_snapshot(modelos: dict, artefacto_nuevo: Path, snapshot_id: str, X_comparacion: pd.DataFrame) -> dict:
+    """Reproduccion numerica (predicciones) y binaria (sha256) frente a un snapshot existente."""
+    original = MODELS / snapshot_id / "modelo.joblib"
+    if not original.exists():
+        raise SystemExit(f"no existe el snapshot {snapshot_id} para comparar")
+    previos = joblib.load(original)
+    diferencias = {k: float(np.max(np.abs(modelos[k].predict(X_comparacion) - previos[k].predict(X_comparacion))))
+                   for k in modelos}
+    return {
+        "horas_comparadas": int(len(X_comparacion)),
+        "predicciones_identicas": all(d == 0.0 for d in diferencias.values()),
+        "diferencia_maxima_mwh": diferencias,
+        "sha256_identico": sha256(artefacto_nuevo) == sha256(original),
+    }
 
 
 def metadatos(identificador, fecha, ajuste, t_ent, X, artefacto: Path) -> dict:
@@ -192,6 +220,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Entrena un snapshot del modelo de la API.")
     parser.add_argument("--fecha-objetivo", required=True, help="primer día que pronostica el modelo (AAAA-MM-DD)")
     parser.add_argument("--destino", help="carpeta de salida (por defecto models/<id>)")
+    parser.add_argument("--comparar-con", help="id de un snapshot existente: informa reproduccion numerica y binaria")
     args = parser.parse_args()
 
     fecha = pd.Timestamp(args.fecha_objetivo)
@@ -202,7 +231,7 @@ def main() -> None:
 
     df, pron = cargar_datos()
     try:
-        modelos, ajuste, t_ent, X = entrenar(fecha, df, pron)
+        modelos, ajuste, t_ent, X, X_prev = entrenar(fecha, df, pron)
     except DatosInsuficientes as e:
         raise SystemExit(f"No se puede entrenar: {e}")
     print(f"Entrenado con {len(t_ent):,} horas: {t_ent.min()} -> {t_ent.max()} | ajuste conformal {ajuste:,.0f} MW")
@@ -212,6 +241,13 @@ def main() -> None:
     meta = metadatos(identificador, fecha, ajuste, t_ent, X, destino / "modelo.joblib")
     (destino / "metadatos.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Guardado: {destino}")
+    if args.comparar_con:
+        X_comparacion = pd.concat([X, X_prev])
+        resultado = comparar_con_snapshot(modelos, destino / "modelo.joblib", args.comparar_con, X_comparacion)
+        print(f"Comparacion con {args.comparar_con} sobre {resultado['horas_comparadas']:,} horas:")
+        print(f"  reproduccion numerica (predicciones identicas): {resultado['predicciones_identicas']} "
+              f"| diferencia maxima: {resultado['diferencia_maxima_mwh']}")
+        print(f"  reproduccion binaria (mismo sha256): {resultado['sha256_identico']}")
 
 
 if __name__ == "__main__":

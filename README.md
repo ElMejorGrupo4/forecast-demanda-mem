@@ -121,7 +121,7 @@ jupyter notebook notebooks/02_modelo_supervisado.ipynb
 jupyter notebook notebooks/03_clustering.ipynb
 python src/preparar_agosto_2026.py        # necesita la planilla actualizada de CAMMESA en data/raw/periodo_nuevo/
 jupyter notebook notebooks/04_evaluacion_agosto_2026.ipynb
-python src/entrenar_modelo.py --fecha-objetivo 2026-08-01 --destino <carpeta>   # reproduce el snapshot (mismo sha256)
+python src/entrenar_modelo.py --fecha-objetivo 2026-08-01 --destino <carpeta> --comparar-con gb_calendario_clima_2026-08-01   # reproduce el snapshot e informa si coinciden predicciones y sha256
 python -m pytest tests                    # pruebas de la API, el módulo y el entrenamiento (sin internet)
 uvicorn api.main:app --reload             # levanta la API: documentación en http://127.0.0.1:8000/docs
 ```
@@ -284,7 +284,7 @@ Si se mandan temperaturas sin las del día anterior y sin `historial_incompleto:
 | Código | Cuándo |
 |---|---|
 | 422 | Pedido inválido: fecha mal escrita, cantidad de temperaturas, valores imposibles, combinación de campos o fecha fuera del rango del pronóstico de Open-Meteo |
-| 502 | Open-Meteo respondió algo inválido: no es JSON, falta la estructura, longitudes distintas, horas duplicadas, desordenadas o de otra fecha, otra zona horaria, temperaturas nulas, no numéricas o imposibles |
+| 502 | Open-Meteo respondió algo inválido, incluido un rechazo 400 con cuerpo mal formado (no es JSON, una lista, `null` o un objeto sin un motivo de texto): no es JSON, falta la estructura, longitudes distintas, horas duplicadas, desordenadas o de otra fecha, otra zona horaria, temperaturas nulas, no numéricas o imposibles |
 | 503 | Open-Meteo no responde, está caído o limita los pedidos |
 
 **Decisiones de diseño**
@@ -297,7 +297,13 @@ Si se mandan temperaturas sin las del día anterior y sin `historial_incompleto:
   - los datos usados, con su huella sha256;
   - el entorno, el commit del código y la huella del artefacto.
 
-  Se verificó que el script reproduce byte a byte el snapshot evaluado.
+  **Reproducibilidad, en dos niveles:**
+
+  - **Numérica:** el modelo regenerado da exactamente las mismas predicciones que el snapshot. Se verificó en el entorno original y, según la auditoría, también en otro entorno: con las dependencias fijadas y Python 3.12.14, las predicciones del modelo central y de los cuantiles 10 y 90 coincidieron en las 744 horas de agosto.
+  - **Binaria (mismo sha256):** verificada **solo en el entorno original** (Python 3.12.6, Windows, `requirements.txt`). En el entorno de la auditoría el archivo regenerado tuvo otro sha256. No se determinó la causa de esa diferencia.
+
+  Por eso las métricas siguen atadas al sha256 del artefacto exacto que se evaluó: un archivo regenerado con otra huella no las hereda, aunque sus predicciones sean iguales. `--comparar-con` informa los dos niveles por separado.
+- **Fechas objetivo y meses parciales.** La fecha objetivo puede ser cualquier día. Si un período empieza a mitad de mes, `md.reentrenar_mensual` usa para ese mes el modelo entrenado al corte de su día 1, que es anterior a todas sus horas, y predice solo las filas pedidas. Si queda alguna fila sin predicción, o si la calibración encuentra puntajes faltantes o menos del 95 % de la historia de su ventana, el proceso se detiene con un mensaje claro en lugar de seguir con menos datos.
 - **Métricas atadas al artefacto.** Están en `models/resultados_experimentos.json`, separadas del script de entrenamiento, con el experimento del que salen. La API las muestra solo si la huella del modelo cargado coincide: un snapshot nuevo no hereda métricas que no se le midieron.
 - **Antigüedad.** El snapshot evaluado se generó en octubre de 2026, pero su último dato de entrenamiento es del **30/07/2026 a las 22:00**. La API informa el corte y la antigüedad en cada respuesta, y avisa cuando supera los 30 días.
 - **Entorno.** `requirements.txt` fija las versiones exactas. La API se niega a arrancar si scikit-learn no coincide con la versión registrada en el snapshot, o si el archivo no coincide con su huella.
@@ -305,13 +311,15 @@ Si se mandan temperaturas sin las del día anterior y sin `historial_incompleto:
 
 **Qué se comprobó y qué no**
 
-- **Localmente, con 46 pruebas automáticas (sin internet):**
+- **Localmente, con 62 pruebas automáticas (sin internet):**
   - endpoints y modos;
   - validaciones de pedido;
-  - respuestas inválidas y fallas de Open-Meteo, simuladas a nivel HTTP con la validación real;
+  - respuestas inválidas y fallas de Open-Meteo, simuladas a nivel HTTP con la validación real, incluidos rechazos 400 con cuerpo mal formado;
   - equivalencia con el pipeline evaluado;
   - verificación de huella y de versión;
-  - validación de cobertura del entrenamiento.
+  - validación de cobertura del entrenamiento y fechas objetivo admitidas o rechazadas;
+  - meses parciales en el reentrenamiento y controles de la calibración.
+- **Con el código final**, el snapshot regenerado da las mismas predicciones (central, cuantil 10 y cuantil 90) y la misma banda en las 744 horas de agosto de 2026, con el mismo ajuste conformal (233,9 MW). En el entorno original también coincide su sha256.
 - **Con consultas reales a Open-Meteo:** un día futuro, uno pasado y uno fuera de rango.
 - **Qué no se comprobó:**
   - el comportamiento en un despliegue (servidor público, concurrencia, disponibilidad);

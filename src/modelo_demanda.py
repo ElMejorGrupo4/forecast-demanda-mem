@@ -159,31 +159,58 @@ def entrenar(X, y, cuantil=None):
 
 
 def reentrenar_mensual(df, X_pred, t_pred, ventana_meses=VENTANA_MESES, cuantiles=CUANTILES):
-    """Igual que en el notebook 02: un modelo por mes, entrenado con lo disponible al corte del dia 1."""
+    """Igual que en el notebook 02: un modelo por mes, entrenado con lo disponible al corte del dia 1.
+
+    Soporta periodos que empiezan o terminan a mitad de mes: el recorrido arranca el dia 1 del mes de la
+    primera fila pedida, cada mes usa el modelo entrenado al corte de su dia 1 (anterior a todas sus filas)
+    y solo se predicen las filas pedidas. Si alguna fila queda sin prediccion, se detiene con un error.
+    """
     salida = pd.DataFrame(index=X_pred.index, dtype=float)
-    for inicio in pd.date_range(t_pred.min(), t_pred.max(), freq="MS"):
+    primer_mes = t_pred.min().to_period("M").to_timestamp()
+    for inicio in pd.date_range(primer_mes, t_pred.max(), freq="MS"):
         fin = inicio + pd.offsets.MonthBegin(1)
+        en_mes = ((t_pred >= inicio) & (t_pred < fin)).values
+        if not en_mes.any():
+            continue
         disponible = fila_para_entrenar(df["timestamp"], inicio)
         if ventana_meses is not None:
             disponible &= df["timestamp"] >= inicio - pd.DateOffset(months=ventana_meses)
         assert (df.loc[disponible, "timestamp"] + DURACION + DEMORA_TEMPERATURA <= corte(inicio)).all()
         X_ent, y_ent = df.loc[disponible, VARIABLES], df.loc[disponible, "demanda_mwh"]
         assert X_ent.notna().all().all(), "hay variables faltantes en el entrenamiento"
-        en_mes = ((t_pred >= inicio) & (t_pred < fin)).values
         salida.loc[en_mes, "pred"] = entrenar(X_ent, y_ent).predict(X_pred[en_mes])
         for q in cuantiles:
             salida.loc[en_mes, f"q{round(q * 100)}"] = entrenar(X_ent, y_ent, q).predict(X_pred[en_mes])
+    faltan = salida.isna().any(axis=1)
+    if faltan.any():
+        raise ValueError(f"reentrenar_mensual dejo {int(faltan.sum())} filas sin prediccion "
+                         f"(desde {pd.Timestamp(t_pred[faltan.values].min())})")
     return salida
 
 
+COBERTURA_MINIMA_CALIBRACION = 0.95   # tolera las horas excluidas a proposito por el corte de emision
+
+
 def calibrar(historia: pd.DataFrame, meses, meses_historia=CALIBRACION_MESES) -> pd.Series:
-    """Ajuste conformal de cada mes con los puntajes ya conocidos al corte de su primera emision."""
+    """Ajuste conformal de cada mes con los puntajes ya conocidos al corte de su primera emision.
+
+    Se detiene con un error (no omite en silencio) si en la ventana hay puntajes faltantes o si la
+    historia cubre menos del 95 % de las horas que deberia tener la ventana.
+    """
     ajuste = pd.Series(np.nan, index=historia.index)
     for inicio in meses:
-        previos = (demanda_conocida(historia["timestamp"], inicio)
-                   & (historia["timestamp"] >= inicio - pd.DateOffset(months=meses_historia)))
+        inicio = pd.Timestamp(inicio)
+        desde = inicio - pd.DateOffset(months=meses_historia)
+        previos = demanda_conocida(historia["timestamp"], inicio) & (historia["timestamp"] >= desde)
+        puntajes = historia.loc[previos, "puntaje"]
+        if puntajes.isna().any():
+            raise ValueError(f"faltan {int(puntajes.isna().sum())} puntajes en la ventana de calibracion de {inicio.date()}")
+        esperadas = int((corte(inicio) - DURACION - DEMORA_DEMANDA - desde) / pd.Timedelta(hours=1)) + 1
+        if len(puntajes) < COBERTURA_MINIMA_CALIBRACION * esperadas:
+            raise ValueError(f"historia insuficiente para calibrar {inicio.date()}: {len(puntajes)} de {esperadas} horas "
+                             f"de los {meses_historia} meses anteriores (desde {desde.date()})")
         en_mes = (historia["timestamp"] >= inicio) & (historia["timestamp"] < inicio + pd.offsets.MonthBegin(1))
-        ajuste[en_mes] = historia.loc[previos, "puntaje"].quantile(0.80)
+        ajuste[en_mes] = puntajes.quantile(0.80)
     return ajuste
 
 
