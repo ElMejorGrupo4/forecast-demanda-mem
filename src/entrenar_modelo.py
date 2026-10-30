@@ -1,28 +1,41 @@
 """
-Entrena el modelo que sirve la API (api/main.py) y lo guarda en models/.
+Entrena un modelo para la API (api/main.py) y lo guarda como snapshot en models/<id>/.
 
-Usa exactamente la configuracion fijada (src/modelo_demanda.py):
-  - Gradient Boosting de calendario y clima con los hiperparametros elegidos
-    en el notebook 02.
-  - Reentrenamiento con los ultimos 24 meses disponibles al corte de la
-    primera emision posterior a los datos (el 31/07/2026 a las 11:00, para
-    pronosticar desde el 01/08/2026). Es el mismo modelo que se evaluo en
-    agosto de 2026 en el notebook 04.
-  - Banda del 80 %: modelos de los cuantiles 10 y 90 con la misma regla, mas
-    el ajuste conformal calculado con los puntajes de los ultimos 3 meses
-    conocidos al corte (mayo a julio de 2026).
+Aplica exactamente la configuracion fijada (src/modelo_demanda.py):
+  - Gradient Boosting de calendario y clima con los hiperparametros del notebook 02.
+  - Entrenamiento con los ultimos 24 meses disponibles al corte de la emision de la
+    FECHA OBJETIVO (primer dia que pronostica el modelo): el dia anterior a las 11:00,
+    con las reglas de disponibilidad de la seccion 4 del notebook 02.
+  - Banda del 80 % (nivel nominal): cuantiles 10 y 90 con la misma regla, ajuste conformal
+    con los puntajes de los ultimos 3 meses conocidos al corte, y la regla de banda unica
+    del modulo (md.banda_80).
+
+El snapshot evaluado es gb_calendario_clima_2026-08-01 (fecha objetivo 01/08/2026): es el
+modelo que se evaluo en agosto de 2026 en el notebook 04. Nunca se sobrescribe un snapshot.
+
+Antes de entrenar se valida que los datos alcancen: la serie tiene que llegar al corte, la
+ventana de 24 meses tiene que estar completa y tiene que haber pronosticos al emitir para los
+3 meses de calibracion. Si no alcanzan, el script se detiene y dice que falta.
+
+Este script NO escribe metricas: las metricas son resultados de un experimento sobre un
+artefacto concreto y estan en models/resultados_experimentos.json, atadas a su huella sha256.
 
 Salidas:
-    models/modelo_demanda.joblib   modelos central, q10 y q90
-    models/modelo_demanda.json     metadatos: datos usados, parametros, ajuste conformal, metricas y advertencias
+    models/<id>/modelo.joblib      modelos central, q10 y q90
+    models/<id>/metadatos.json     configuracion, datos usados (con huellas), entorno, corte y advertencias
 
 Uso:
-    python src/entrenar_modelo.py
+    python src/entrenar_modelo.py --fecha-objetivo 2026-08-01
+    python src/entrenar_modelo.py --fecha-objetivo 2026-08-01 --destino <carpeta>   # p. ej. para verificar reproducibilidad
 """
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
+import platform
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,82 +50,168 @@ import modelo_demanda as md   # noqa: E402
 
 BASE = Path(__file__).resolve().parents[1]
 DATA = BASE / "data" / "processed"
-SALIDA = BASE / "models"
-PRIMER_DIA = pd.Timestamp("2026-08-01")   # primer dia que pronostica el modelo guardado
+MODELS = BASE / "models"
+ARCHIVOS_DATOS = {
+    "demanda": DATA / "demanda_horaria_mem.csv",
+    "temperatura_historica": DATA / "temperatura_horaria_ba.csv",
+    "temperatura_al_emitir": DATA / "temperatura_pronosticada_ba.csv",
+}
 
 
-def main() -> None:
-    serie = pd.read_csv(DATA / "demanda_horaria_mem.csv", parse_dates=["timestamp"])
-    temperatura = pd.read_csv(DATA / "temperatura_horaria_ba.csv", parse_dates=["timestamp"])
+class DatosInsuficientes(Exception):
+    """Los datos no alcanzan para entrenar con esa fecha objetivo sin violar las reglas."""
+
+
+def sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for bloque in iter(lambda: f.read(1 << 20), b""):
+            h.update(bloque)
+    return h.hexdigest()
+
+
+def commit_del_codigo() -> dict:
+    """Commit de git del codigo con el que se entrena (y si habia cambios sin commitear)."""
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=BASE, capture_output=True, text=True, check=True).stdout.strip()
+        sucio = bool(subprocess.run(["git", "status", "--porcelain", "--", "src", "api"], cwd=BASE,
+                                    capture_output=True, text=True, check=True).stdout.strip())
+        return {"commit": commit, "cambios_sin_commitear_en_src_o_api": sucio}
+    except (OSError, subprocess.CalledProcessError):
+        return {"commit": None, "cambios_sin_commitear_en_src_o_api": None}
+
+
+def cargar_datos() -> tuple[pd.DataFrame, pd.DataFrame]:
+    serie = pd.read_csv(ARCHIVOS_DATOS["demanda"], parse_dates=["timestamp"])
+    temperatura = pd.read_csv(ARCHIVOS_DATOS["temperatura_historica"], parse_dates=["timestamp"])
     df = md.armar_variables(serie.merge(temperatura, on="timestamp", how="left", validate="one_to_one"))
-    assert df["timestamp"].max() < PRIMER_DIA, "los datos no pueden llegar al periodo que se pronostica"
+    pron = pd.read_csv(ARCHIVOS_DATOS["temperatura_al_emitir"], parse_dates=["timestamp", "dia_objetivo"])
+    return df, pron
 
-    # filas disponibles al corte del 31/07/2026 11:00, ultimos 24 meses
-    disponible = (md.fila_para_entrenar(df["timestamp"], PRIMER_DIA)
-                  & (df["timestamp"] >= PRIMER_DIA - pd.DateOffset(months=md.VENTANA_MESES)))
+
+def validar_cobertura(df: pd.DataFrame, pron: pd.DataFrame, fecha: pd.Timestamp) -> None:
+    """Comprueba que los datos alcancen para la fecha objetivo; si no, explica que falta."""
+    corte = md.corte(fecha)
+    ultima_utilizable = corte - md.DURACION - md.DEMORA_TEMPERATURA   # ultima hora que se puede usar para entrenar
+    if df["timestamp"].max() < ultima_utilizable:
+        raise DatosInsuficientes(
+            f"la serie termina el {df['timestamp'].max()}, pero para la fecha objetivo {fecha.date()} hacen falta datos "
+            f"hasta el {ultima_utilizable} (corte {corte}). Actualizar la serie y la temperatura historica antes de entrenar.")
+    if df["timestamp"].min() > fecha - pd.DateOffset(months=md.VENTANA_MESES):
+        raise DatosInsuficientes(f"la serie empieza el {df['timestamp'].min()}: no alcanza para una ventana de {md.VENTANA_MESES} meses")
+    if df["timestamp"].max() >= fecha:
+        raise DatosInsuficientes("la serie incluye horas del periodo a pronosticar: elegir una fecha objetivo posterior a los datos")
+    inicio_cal = fecha - pd.DateOffset(months=md.CALIBRACION_MESES)
+    dias_cal = pd.date_range(inicio_cal, fecha - pd.Timedelta(days=1), freq="D")
+    faltan = dias_cal.difference(pd.DatetimeIndex(pron["dia_objetivo"].unique()))
+    if len(faltan):
+        raise DatosInsuficientes(
+            f"faltan pronosticos al emitir para {len(faltan)} dias de calibracion ({faltan[0].date()} -> {faltan[-1].date()}). "
+            "Correr src/descargar_temperatura_pronosticada.py para ese periodo.")
+
+
+def entrenar(fecha: pd.Timestamp, df: pd.DataFrame, pron: pd.DataFrame):
+    validar_cobertura(df, pron, fecha)
+    disponible = (md.fila_para_entrenar(df["timestamp"], fecha)
+                  & (df["timestamp"] >= fecha - pd.DateOffset(months=md.VENTANA_MESES)))
     X, y = df.loc[disponible, md.VARIABLES], df.loc[disponible, "demanda_mwh"]
-    print(f"Entrenando con {len(X):,} horas: {df.loc[disponible, 'timestamp'].min()} -> {df.loc[disponible, 'timestamp'].max()}")
+    if X.isna().any().any() or y.isna().any():
+        raise DatosInsuficientes("hay valores faltantes en la ventana de entrenamiento")
     modelos = {"central": md.entrenar(X, y)}
     for q in md.CUANTILES:
         modelos[f"q{round(q * 100)}"] = md.entrenar(X, y, q)
 
-    # ajuste conformal: puntajes de mayo a julio de 2026 (fuera de muestra, con la temperatura disponible al emitir)
-    pron = pd.read_csv(DATA / "temperatura_pronosticada_ba.csv", parse_dates=["timestamp", "dia_objetivo"])
+    # ajuste conformal: puntajes fuera de muestra de los ultimos 3 meses, con la temperatura disponible al emitir
     clima = md.clima_al_emitir(pron)
-    previos = (df["timestamp"] >= PRIMER_DIA - pd.DateOffset(months=md.CALIBRACION_MESES)) & (df["timestamp"] < PRIMER_DIA)
+    previos = (df["timestamp"] >= fecha - pd.DateOffset(months=md.CALIBRACION_MESES)) & (df["timestamp"] < fecha)
     t_prev = df.loc[previos, "timestamp"]
     X_prev = df.loc[previos, md.VARIABLES].copy()
     X_prev[md.CLIMATICAS] = clima.loc[t_prev.values, md.CLIMATICAS].values
     reent = md.reentrenar_mensual(df, X_prev, t_prev)
-    puntajes = pd.DataFrame({
-        "timestamp": t_prev.values,
-        "real": df.loc[previos, "demanda_mwh"].values,
-        "q10": reent["q10"].values, "q90": reent["q90"].values,
-    })
+    puntajes = pd.DataFrame({"timestamp": t_prev.values, "real": df.loc[previos, "demanda_mwh"].values,
+                             "q10": reent["q10"].values, "q90": reent["q90"].values})
     puntajes["puntaje"] = np.maximum(puntajes["q10"] - puntajes["real"], puntajes["real"] - puntajes["q90"])
-    calibracion = pd.concat([puntajes, pd.DataFrame({"timestamp": [PRIMER_DIA]})], ignore_index=True)
-    ajuste = float(md.calibrar(calibracion, [PRIMER_DIA]).iloc[-1])
-    print(f"Ajuste conformal de la banda: {ajuste:,.0f} MW")
+    calibracion = pd.concat([puntajes, pd.DataFrame({"timestamp": [fecha]})], ignore_index=True)
+    ajuste = float(md.calibrar(calibracion, [fecha]).iloc[-1])
+    return modelos, ajuste, df.loc[disponible, "timestamp"], X
 
-    SALIDA.mkdir(exist_ok=True)
-    joblib.dump(modelos, SALIDA / "modelo_demanda.joblib")
-    metadatos = {
+
+def metadatos(identificador, fecha, ajuste, t_ent, X, artefacto: Path) -> dict:
+    return {
+        "id": identificador,
         "modelo": "Gradient Boosting de calendario y clima (HistGradientBoostingRegressor)",
-        "variables": md.VARIABLES,
-        "hiperparametros": md.PARAMS_GB,
-        "temperatura_de_confort_c": md.TEMP_CONFORT,
-        "rango_temperatura_entrenamiento_c": [float(X["temperatura_c"].min()), float(X["temperatura_c"].max())],
+        "fecha_objetivo": str(fecha.date()),
+        "emision_de_la_fecha_objetivo": str(fecha - pd.Timedelta(days=1) + md.EMISION),
+        "corte_de_informacion": str(md.corte(fecha)),
         "datos_de_entrenamiento": {
-            "desde": str(df.loc[disponible, "timestamp"].min()),
-            "hasta": str(df.loc[disponible, "timestamp"].max()),
-            "horas": int(len(X)),
-            "regla": f"últimos {md.VENTANA_MESES} meses disponibles al corte de la emisión del {PRIMER_DIA.date()}",
+            "desde": str(t_ent.min()), "hasta": str(t_ent.max()), "horas": int(len(t_ent)),
+            "regla": f"últimos {md.VENTANA_MESES} meses disponibles al corte (reglas de disponibilidad del notebook 02, sección 4)",
         },
+        "rango_temperatura_entrenamiento_c": [float(X["temperatura_c"].min()), float(X["temperatura_c"].max())],
         "banda": {
-            "nivel": 0.80,
+            "nivel_nominal": 0.80,
             "cuantiles": list(md.CUANTILES),
             "ajuste_conformal_mw": round(ajuste, 1),
             "calibracion": f"percentil 80 de los puntajes de los últimos {md.CALIBRACION_MESES} meses conocidos al corte",
+            "regla": "md.banda_80: cuantiles 10 y 90 ± ajuste conformal; si la banda no contiene al valor central, se extiende hasta él",
+            "aclaracion": "80 % es el nivel nominal; la cobertura empírica observada fue menor en varios meses (ver resultados_experimentos.json)",
         },
-        "metricas": {
-            "agosto_2026_periodo_nuevo": {"MAPE_%": 3.98, "WAPE_%": 4.06, "cobertura_banda_%": 72.4,
-                                          "fuente": "notebook 04 (evaluación pre-registrada)"},
-            "test_ene2025_jul2026": {"MAPE_%": 4.08, "WAPE_%": 4.18, "cobertura_banda_%": 79.1,
-                                     "fuente": "notebook 02 (test reutilizado en las revisiones)"},
+        "configuracion": {
+            "variables": md.VARIABLES,
+            "hiperparametros": md.PARAMS_GB,
+            "temperatura_de_confort_c": md.TEMP_CONFORT,
+            "ventana_meses": md.VENTANA_MESES,
+            "calibracion_meses": md.CALIBRACION_MESES,
+            "emision": "día anterior a las 12:00", "margen_para_entrenar_y_emitir_h": md.MARGEN / pd.Timedelta(hours=1),
+            "demora_supuesta_temperatura_historica_h": md.DEMORA_TEMPERATURA / pd.Timedelta(hours=1),
+        },
+        "datos": {
+            nombre: {"archivo": str(ruta.relative_to(BASE)).replace("\\", "/"), "sha256": sha256(ruta)}
+            for nombre, ruta in ARCHIVOS_DATOS.items()
         },
         "temperatura": "Open-Meteo, modelo ECMWF IFS 9 km, coordenadas de Aeroparque (-34.56, -58.42)",
+        "entorno": {
+            "python": platform.python_version(), "scikit-learn": sklearn.__version__, "numpy": np.__version__,
+            "pandas": pd.__version__, "joblib": joblib.__version__,
+        },
+        "codigo": commit_del_codigo(),
+        "artefacto": {"archivo": f"models/{identificador}/modelo.joblib", "sha256": sha256(artefacto)},
+        "generado_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
+        "metricas": "Este archivo no incluye métricas. Las métricas son resultados de experimentos sobre un artefacto "
+                    "concreto: ver models/resultados_experimentos.json (válidas solo si coincide el sha256 del artefacto).",
         "advertencias": [
-            "La banda del 80 % no está bien calibrada en todos los meses: en agosto de 2026 cubrió el 72 % de las horas "
-            "y en el test hubo 5 de 19 meses por debajo del 75 %.",
+            "El 80 % de la banda es su nivel nominal: en las evaluaciones la cobertura empírica fue menor en varios meses.",
             "El modelo tiende a quedarse corto en los máximos diarios y en las horas de demanda alta.",
             "Describe asociaciones entre demanda, calendario y temperatura; no relaciones causales.",
             "Usa la temperatura de una sola ciudad (Buenos Aires) para la demanda de todo el país.",
         ],
-        "version_scikit_learn": sklearn.__version__,
-        "entrenado_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
     }
-    (SALIDA / "modelo_demanda.json").write_text(json.dumps(metadatos, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"Guardado: models/modelo_demanda.joblib y models/modelo_demanda.json")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Entrena un snapshot del modelo de la API.")
+    parser.add_argument("--fecha-objetivo", required=True, help="primer día que pronostica el modelo (AAAA-MM-DD)")
+    parser.add_argument("--destino", help="carpeta de salida (por defecto models/<id>)")
+    args = parser.parse_args()
+
+    fecha = pd.Timestamp(args.fecha_objetivo)
+    identificador = f"gb_calendario_clima_{fecha.date()}"
+    destino = Path(args.destino) if args.destino else MODELS / identificador
+    if (destino / "modelo.joblib").exists():
+        raise SystemExit(f"ya existe {destino}: los snapshots no se sobrescriben")
+
+    df, pron = cargar_datos()
+    try:
+        modelos, ajuste, t_ent, X = entrenar(fecha, df, pron)
+    except DatosInsuficientes as e:
+        raise SystemExit(f"No se puede entrenar: {e}")
+    print(f"Entrenado con {len(t_ent):,} horas: {t_ent.min()} -> {t_ent.max()} | ajuste conformal {ajuste:,.0f} MW")
+
+    destino.mkdir(parents=True, exist_ok=True)
+    joblib.dump(modelos, destino / "modelo.joblib")
+    meta = metadatos(identificador, fecha, ajuste, t_ent, X, destino / "modelo.joblib")
+    (destino / "metadatos.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"Guardado: {destino}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,95 @@
+{
+  "id": "gb_calendario_clima_2026-08-01",
+  "modelo": "Gradient Boosting de calendario y clima (HistGradientBoostingRegressor)",
+  "fecha_objetivo": "2026-08-01",
+  "emision_de_la_fecha_objetivo": "2026-07-31 12:00:00",
+  "corte_de_informacion": "2026-07-31 11:00:00",
+  "datos_de_entrenamiento": {
+    "desde": "2024-08-01 00:00:00",
+    "hasta": "2026-07-30 22:00:00",
+    "horas": 17495,
+    "regla": "últimos 24 meses disponibles al corte (reglas de disponibilidad del notebook 02, sección 4)"
+  },
+  "rango_temperatura_entrenamiento_c": [
+    -0.8,
+    38.6
+  ],
+  "banda": {
+    "nivel_nominal": 0.8,
+    "cuantiles": [
+      0.1,
+      0.9
+    ],
+    "ajuste_conformal_mw": 233.9,
+    "calibracion": "percentil 80 de los puntajes de los últimos 3 meses conocidos al corte",
+    "regla": "md.banda_80: cuantiles 10 y 90 ± ajuste conformal; si la banda no contiene al valor central, se extiende hasta él",
+    "aclaracion": "80 % es el nivel nominal; la cobertura empírica observada fue menor en varios meses (ver resultados_experimentos.json)"
+  },
+  "configuracion": {
+    "variables": [
+      "hora",
+      "dia_semana",
+      "mes",
+      "es_habil",
+      "temperatura_c",
+      "temp_24h",
+      "hdd",
+      "cdd"
+    ],
+    "hiperparametros": {
+      "min_samples_leaf": 100,
+      "max_iter": 200,
+      "max_depth": 10,
+      "learning_rate": 0.05,
+      "l2_regularization": 1.0,
+      "early_stopping": false,
+      "random_state": 42
+    },
+    "temperatura_de_confort_c": 18,
+    "ventana_meses": 24,
+    "calibracion_meses": 3,
+    "emision": "día anterior a las 12:00",
+    "margen_para_entrenar_y_emitir_h": 1.0,
+    "demora_supuesta_temperatura_historica_h": 12.0
+  },
+  "datos": {
+    "demanda": {
+      "archivo": "data/processed/demanda_horaria_mem.csv",
+      "sha256": "fb7788d8f53540d482bec0f065f1b4261563b43db34b1cc56c8c59c2775b5913"
+    },
+    "temperatura_historica": {
+      "archivo": "data/processed/temperatura_horaria_ba.csv",
+      "sha256": "1a81d67dc68205ef2761f353e3b46afd251aaa7b40c7972a65ef0c968fbe2523"
+    },
+    "temperatura_al_emitir": {
+      "archivo": "data/processed/temperatura_pronosticada_ba.csv",
+      "sha256": "60ff5e40fc6273c11272d9170566c0659c5f019198556d4087b3935d6e3cca8a"
+    }
+  },
+  "temperatura": "Open-Meteo, modelo ECMWF IFS 9 km, coordenadas de Aeroparque (-34.56, -58.42)",
+  "entorno": {
+    "python": "3.12.6",
+    "scikit-learn": "1.9.0",
+    "numpy": "2.5.1",
+    "pandas": "3.0.3",
+    "joblib": "1.5.3"
+  },
+  "codigo": {
+    "commit": "701f208432b0cb7f402e18549b04a2929c956ca5",
+    "nota": "entrenado originalmente con ese commit; en la revisión de la API se verificó que src/entrenar_modelo.py --fecha-objetivo 2026-08-01 lo reproduce byte a byte (mismo sha256)"
+  },
+  "artefacto": {
+    "archivo": "models/gb_calendario_clima_2026-08-01/modelo.joblib",
+    "sha256": "1893f0e816c4ab800035e141ddd93d1577b77cfdb32e579ccb058969f9c6beff"
+  },
+  "generado_utc": "2026-10-29 04:41",
+  "metricas": "Este archivo no incluye métricas. Las métricas son resultados de experimentos sobre un artefacto concreto: ver models/resultados_experimentos.json (válidas solo si coincide el sha256 del artefacto).",
+  "advertencias": [
+    "El 80 % de la banda es su nivel nominal: en las evaluaciones la cobertura empírica fue menor en varios meses.",
+    "El modelo tiende a quedarse corto en los máximos diarios y en las horas de demanda alta.",
+    "Describe asociaciones entre demanda, calendario y temperatura; no relaciones causales.",
+    "Usa la temperatura de una sola ciudad (Buenos Aires) para la demanda de todo el país."
+  ],
+  "metadatos_regenerados_utc": "2026-10-29",
+  "metadatos_anteriores": "models/gb_calendario_clima_2026-08-01/metadatos_v1.json (formato original, conservado por trazabilidad)"
+}
