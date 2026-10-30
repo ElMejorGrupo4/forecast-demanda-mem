@@ -232,10 +232,14 @@ def consultar_open_meteo(fecha: date) -> tuple[pd.Series, dict]:
     except requests.exceptions.RequestException:
         raise HTTPException(503, "Open-Meteo no respondió. Se puede mandar las temperaturas en el pedido (simulación manual).")
     if r.status_code == 400:
+        # el cuerpo de un 400 tambien puede venir mal formado: solo un diccionario con "reason" de texto
+        # permite atribuir el rechazo al pedido del usuario; cualquier otra cosa es una falla externa (502)
         try:
-            motivo = str(r.json().get("reason", ""))
+            cuerpo = r.json()
         except ValueError:
-            motivo = ""
+            cuerpo = None
+        motivo = cuerpo.get("reason") if isinstance(cuerpo, dict) else None
+        motivo = motivo if isinstance(motivo, str) else ""
         if "out of allowed range" in motivo:
             raise HTTPException(422, f"Open-Meteo no tiene pronóstico para esa fecha ({motivo}). "
                                      "Mandá las temperaturas en el pedido (simulación manual).")

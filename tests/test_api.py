@@ -281,6 +281,12 @@ def test_respuestas_invalidas_del_proveedor_son_502(cliente, monkeypatch, respue
     (RespuestaFalsa(400, {"error": True, "reason": "Parameter 'start_date' is out of allowed range from 2026-07-28 to 2026-11-13"}),
      None, 422),                                                                    # la fecha pedida no tiene pronóstico
     (RespuestaFalsa(400, {"error": True, "reason": "Cannot initialize WeatherVariable"}), None, 502),
+    # 400 con cuerpo mal formado: no se puede atribuir al usuario, es una falla externa (antes daba 500)
+    (RespuestaFalsa(400, []), None, 502),                                           # lista
+    (RespuestaFalsa(400, None), None, 502),                                         # null
+    (RespuestaFalsa(400, no_json=True), None, 502),                                 # JSON ilegible
+    (RespuestaFalsa(400, {"error": True}), None, 502),                              # diccionario sin "reason"
+    (RespuestaFalsa(400, {"error": True, "reason": ["out of allowed range"]}), None, 502),   # "reason" que no es texto
     (RespuestaFalsa(500, {}), None, 503),
     (RespuestaFalsa(429, {}), None, 503),
     (RespuestaFalsa(404, {}), None, 502),
