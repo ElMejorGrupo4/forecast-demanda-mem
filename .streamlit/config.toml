@@ -1,0 +1,10 @@
+# Tema de la demo con Streamlit (demo/streamlit_app.py): los mismos azules de la presentación.
+[theme]
+primaryColor = "#1A4FD6"
+backgroundColor = "#F7F9FC"
+secondaryBackgroundColor = "#E8EEF8"
+textColor = "#102449"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

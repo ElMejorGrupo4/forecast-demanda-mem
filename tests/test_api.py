@@ -348,3 +348,35 @@ def test_entrenamiento_valida_cobertura_de_los_datos():
     with pytest.raises(em.DatosInsuficientes, match="hacen falta datos"):
         em.validar_cobertura(df, pron, pd.Timestamp("2026-10-01"))
     em.validar_cobertura(df, pron, pd.Timestamp("2026-08-01"))   # el snapshot evaluado sí cumple
+
+
+# ---------------------------------------------------------------------------
+# Función interna compartida con la demo de Streamlit
+# ---------------------------------------------------------------------------
+def test_endpoint_y_funcion_interna_dan_el_mismo_pronostico(cliente, monkeypatch):
+    """Regresión del refactor: el endpoint devuelve exactamente lo que calcula calcular_pronostico."""
+    llamadas = []
+
+    def falso_get(*args, **kwargs):
+        llamadas.append(kwargs.get("params"))
+        return RespuestaFalsa(datos=respuesta_valida())
+    monkeypatch.setattr(api.requests, "get", falso_get)
+
+    for pedido in (manual(), {"fecha": DIA}):
+        via_endpoint = pedir(cliente, **pedido).json()
+        respuesta, variables = api.calcular_pronostico(api.PedidoPronostico(**pedido))
+        assert via_endpoint == respuesta.model_dump(mode="json")
+        assert list(variables.columns) == md.VARIABLES and len(variables) == 24
+    assert len(llamadas) == 2   # una consulta a Open-Meteo por cálculo en modo actual (endpoint + función)
+
+
+def test_variables_devueltas_son_las_usadas_para_predecir(cliente):
+    respuesta, variables = api.calcular_pronostico(api.PedidoPronostico(**manual()))
+    temperaturas = pd.concat([
+        pd.Series(INVIERNO_ANTERIOR, index=pd.date_range(pd.Timestamp(DIA) - pd.Timedelta(days=1), periods=24, freq="h")),
+        pd.Series(INVIERNO, index=pd.date_range(DIA, periods=24, freq="h")),
+    ])
+    esperado = api.construir_variables(pd.Timestamp(DIA).date(), temperaturas, "habil", historial_completo=True)
+    pd.testing.assert_frame_equal(variables, esperado)
+    central = api.estado["modelos"]["central"].predict(variables)
+    assert np.allclose([h.demanda_mwh for h in respuesta.horas], central, atol=0.05)

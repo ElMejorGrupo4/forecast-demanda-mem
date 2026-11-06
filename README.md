@@ -82,6 +82,11 @@ forecast-demanda-mem/
 ├── requirements.txt
 ├── api/
 │   └── main.py       # API con FastAPI que sirve el modelo
+├── demo/
+│   ├── streamlit_app.py   # demo con Streamlit: reutiliza la lógica de la API
+│   ├── caso_historico.py  # caso histórico validado del 12/08/2026
+│   └── requirements.txt   # dependencias de la demo, separadas y fijadas
+├── .streamlit/config.toml # tema de la demo
 ├── models/
 │   ├── gb_calendario_clima_2026-08-01/   # snapshot evaluado en agosto de 2026: modelo.joblib + metadatos.json
 │   └── resultados_experimentos.json       # métricas atadas a la huella sha256 de cada artefacto
@@ -124,6 +129,7 @@ jupyter notebook notebooks/04_evaluacion_agosto_2026.ipynb
 python src/entrenar_modelo.py --fecha-objetivo 2026-08-01 --destino <carpeta> --comparar-con gb_calendario_clima_2026-08-01   # reproduce el snapshot e informa si coinciden predicciones y sha256
 python -m pytest tests                    # pruebas de la API, el módulo y el entrenamiento (sin internet)
 uvicorn api.main:app --reload             # levanta la API: documentación en http://127.0.0.1:8000/docs
+pip install -r demo/requirements.txt && streamlit run demo/streamlit_app.py   # demo con Streamlit
 ```
 
 `data/raw/` no se versiona en git (archivos pesados). `descargar_demanda_mem.py` baja sus planillas solo; para `construir_dataset_regional.py` hay que descargar los tres archivos crudos de las fuentes de arriba y copiarlos en `data/raw/` con esos nombres.
@@ -311,7 +317,7 @@ Si se mandan temperaturas sin las del día anterior y sin `historial_incompleto:
 
 **Qué se comprobó y qué no**
 
-- **Localmente, con 62 pruebas automáticas (sin internet):**
+- **Localmente, con 70 pruebas automáticas (sin internet), incluidas las de la demo con Streamlit:**
   - endpoints y modos;
   - validaciones de pedido;
   - respuestas inválidas y fallas de Open-Meteo, simuladas a nivel HTTP con la validación real, incluidos rechazos 400 con cuerpo mal formado;
@@ -324,6 +330,39 @@ Si se mandan temperaturas sin las del día anterior y sin `historial_incompleto:
 - **Qué no se comprobó:**
   - el comportamiento en un despliegue (servidor público, concurrencia, disponibilidad);
   - el desempeño de un snapshot nuevo hasta que se lo evalúe en un período posterior a su fecha objetivo.
+
+## Demo con Streamlit
+
+`demo/streamlit_app.py` es una interfaz para mostrar el modelo en la presentación. **No tiene lógica propia de pronóstico**: llama a `api.main.calcular_pronostico`, la misma función que usa el endpoint `POST /pronostico`. Por eso usa el mismo snapshot, la misma validación de Open-Meteo, las mismas variables, la misma banda, el mismo bloque `alcance` y las mismas advertencias. En el modo actual hace **una sola** consulta a Open-Meteo, y la tabla de variables que muestra es exactamente la que usó el modelo.
+
+- **Alcance:** total del MEM; no hay selector regional, porque el modelo horario no pronostica por región.
+- **Entrada:** fecha y si es feriado.
+- **Salida:**
+  - demanda máxima y hora del pico, demanda mínima, energía del día y temperatura mínima y máxima;
+  - gráfico horario del pronóstico central con la **banda nominal del 80 %**;
+  - gráfico de temperatura;
+  - tabla de variables: hora, día de semana, mes, día hábil, temperatura, media móvil de 24 h, HDD y CDD con base 18 °C;
+  - fuente meteorológica, modelo, antigüedad y advertencias de la API.
+- **Métricas históricas:** "MAPE test 4,1 %" y "MAPE agosto de 2026 4,0 %" se muestran rotuladas como evaluaciones pasadas, no como el error del pronóstico mostrado.
+- **Caso histórico validado — 12/08/2026:** una reproducción histórica, no un pronóstico actual. Usa las temperaturas de las corridas de ECMWF disponibles al emitir (00 y 06 UTC del 11/08/2026), registradas en el repositorio. Pasa por el modo de simulación manual de la API y se compara con la demanda real de CAMMESA de ese día. Sirve también para mostrar la demo sin conexión.
+- **Errores:** si Open-Meteo no responde o responde datos inválidos, la página lo dice con claridad y sugiere el caso histórico. Si la fecha no tiene pronóstico, explica por qué.
+- **No incluye:** SHAP, explicaciones con LLM ni afirmaciones causales.
+
+**Ejecución local**, desde la carpeta del proyecto, en un entorno aparte:
+
+```bash
+python -m venv .venv-demo
+.\.venv-demo\Scripts\Activate.ps1      # Windows PowerShell (en Linux o macOS: source .venv-demo/bin/activate)
+pip install -r demo/requirements.txt
+streamlit run demo/streamlit_app.py
+```
+
+**Despliegue en Streamlit Community Cloud: es viable.**
+- **Por qué:** el repo es público, el snapshot (2,2 MB) está versionado, `demo/requirements.txt` fija las versiones y Open-Meteo es accesible y gratuito para uso no comercial.
+- **Configuración al crear la app:** archivo principal `demo/streamlit_app.py`, Python 3.12.
+- **Requisito:** scikit-learn tiene que quedar en 1.9.0, porque la API no carga el snapshot con otra versión.
+- **Lo que no se probó:** no se hizo un despliegue real; requiere una cuenta de Streamlit vinculada a GitHub.
+- **Riesgo:** la app gratuita se suspende si nadie la usa y tarda en volver. Conviene abrirla antes de presentar, o usar el caso histórico.
 
 ## Reflexión: sesgos, límites y uso responsable
 

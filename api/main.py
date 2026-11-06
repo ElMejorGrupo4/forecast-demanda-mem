@@ -347,6 +347,16 @@ def modelo():
 
 @app.post("/pronostico", response_model=RespuestaPronostico, summary="Pronóstico de las 24 horas de un día")
 def pronostico(pedido: PedidoPronostico):
+    respuesta, _ = calcular_pronostico(pedido)
+    return respuesta
+
+
+def calcular_pronostico(pedido: PedidoPronostico) -> tuple[RespuestaPronostico, pd.DataFrame]:
+    """Calcula el pronostico de un dia. Es la logica unica que usan el endpoint y la demo de Streamlit.
+
+    Devuelve la respuesta (el mismo contrato del endpoint) y la tabla exacta de variables con la que se
+    predijo (24 filas, columnas md.VARIABLES), sin volver a consultar a Open-Meteo.
+    """
     consulta = ahora()
     inicio = pd.Timestamp(pedido.fecha)
     tipo = tipo_de_dia(pedido.fecha, pedido.es_feriado)
@@ -431,5 +441,6 @@ def pronostico(pedido: PedidoPronostico):
     alcance = Alcance(modo=modo, historial_termico=historial, consultado_en=consulta, horizonte_horas=horizonte,
                       fecha_pasada=bool(fecha_pasada), fuente_meteorologica=fuente, banda=banda,
                       relacion_con_la_evaluacion=relacion, modelo=usado)
-    return RespuestaPronostico(fecha=pedido.fecha, tipo_dia=tipo, alcance=alcance, horas=horas,
-                               resumen=resumen, advertencias=advertencias)
+    respuesta = RespuestaPronostico(fecha=pedido.fecha, tipo_dia=tipo, alcance=alcance, horas=horas,
+                                    resumen=resumen, advertencias=advertencias)
+    return respuesta, X
