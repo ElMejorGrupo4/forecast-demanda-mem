@@ -8,6 +8,7 @@ __pycache__/
 .ipynb_checkpoints/
 .venv/
 venv/
+.venv-demo/
 
 # Sistema
 .DS_Store
