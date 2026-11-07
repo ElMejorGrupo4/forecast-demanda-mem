@@ -1,10 +1,20 @@
-# Tema de la demo con Streamlit (demo/streamlit_app.py): los mismos azules de la presentación.
+# Tema de la demo con Streamlit (demo/streamlit_app.py): los colores y tipografías de la presentación.
+# Lo que el tema no cubre (degradados, tarjetas, etiquetas de sección) está en demo/estilo.py.
 [theme]
-primaryColor = "#1A4FD6"
-backgroundColor = "#F7F9FC"
-secondaryBackgroundColor = "#E8EEF8"
+primaryColor = "#1A4FD6"            # azul
+backgroundColor = "#F1F4F9"         # fondo gris azulado de las diapositivas
+secondaryBackgroundColor = "#E3EAF6"
 textColor = "#102449"
-font = "sans serif"
+font = "'Public Sans':https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&display=swap"
+headingFont = "Montserrat:https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&display=swap"
+baseRadius = "small"
+
+# Barra lateral oscura, como el panel izquierdo de las diapositivas (el degradado se agrega en demo/estilo.py).
+[theme.sidebar]
+backgroundColor = "#0B2D72"
+secondaryBackgroundColor = "#1A3F95"
+textColor = "#FAFBFD"
+primaryColor = "#33C6EE"            # celeste
 
 [browser]
 gatherUsageStats = false
