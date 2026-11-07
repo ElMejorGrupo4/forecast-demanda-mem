@@ -35,11 +35,11 @@ sys.path.insert(0, str(BASE / "src"))
 import api.main as api            # noqa: E402  (logica unica de la API)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from caso_historico import corridas_historicas, pedido_historico   # noqa: E402
+from estilo import AZUL, AZUL_MARINO, CELESTE, CSS, VERDE_AGUA, configurar_grafico   # noqa: E402  (solo apariencia)
 
 MODO_ACTUAL = "Pronóstico actual (Open-Meteo)"
 MODO_HISTORICO = "Caso histórico validado — 12/08/2026"
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-AZUL, AZUL_OSCURO, CIAN, NARANJA = "#1A4FD6", "#0B2D72", "#9FC3FF", "#F28C28"
 MILES = "replace(format(datum.value, ',.0f'), ',', '.')"   # ejes con punto de miles, como el resto de la pagina
 
 
@@ -76,7 +76,7 @@ def mostrar_error(error: HTTPException) -> None:
 
 
 def grafico_demanda(tabla: pd.DataFrame, real: pd.Series | None) -> alt.Chart:
-    banda = alt.Chart(tabla).mark_area(opacity=0.35, color=CIAN).encode(
+    banda = alt.Chart(tabla).mark_area(opacity=0.25, color=CELESTE).encode(
         x=alt.X("hora:Q", title="Hora", scale=alt.Scale(domain=[0, 23], nice=False), axis=alt.Axis(tickCount=12)),
         y=alt.Y("banda_inferior_mwh:Q", title="MWh", scale=alt.Scale(zero=False), axis=alt.Axis(labelExpr=MILES)),
         y2="banda_superior_mwh:Q",
@@ -90,12 +90,12 @@ def grafico_demanda(tabla: pd.DataFrame, real: pd.Series | None) -> alt.Chart:
     series = ["Pronóstico central"] + (["Demanda real (CAMMESA)"] if real is not None else [])
     linea = alt.Chart(lineas).mark_line(point=True, strokeWidth=3).encode(
         x="hora:Q", y=alt.Y("MWh:Q", scale=alt.Scale(zero=False), axis=alt.Axis(labelExpr=MILES)),
-        color=alt.Color("serie:N", title=None, scale=alt.Scale(domain=series, range=[AZUL_OSCURO, NARANJA][:len(series)]),
+        color=alt.Color("serie:N", title=None, scale=alt.Scale(domain=series, range=[AZUL_MARINO, VERDE_AGUA][:len(series)]),
                         legend=alt.Legend(orient="top")),
         tooltip=[alt.Tooltip("hora:Q", title="Hora"), alt.Tooltip("serie:N", title="Serie"),
                  alt.Tooltip("MWh:Q", format=".0f")],
     )
-    return (banda + linea).properties(height=380)
+    return configurar_grafico((banda + linea).properties(height=380))
 
 
 def grafico_temperatura(variables: pd.DataFrame) -> alt.Chart:
@@ -104,13 +104,19 @@ def grafico_temperatura(variables: pd.DataFrame) -> alt.Chart:
         "°C": list(variables["temperatura_c"]) + list(variables["temp_24h"]),
         "serie": ["Temperatura de la hora"] * 24 + ["Promedio de 24 h"] * 24,
     })
-    return alt.Chart(datos).mark_line(point=True, strokeWidth=2.5).encode(
+    return configurar_grafico(alt.Chart(datos).mark_line(point=True, strokeWidth=2.5).encode(
         x=alt.X("hora:Q", title="Hora", scale=alt.Scale(domain=[0, 23], nice=False), axis=alt.Axis(tickCount=12)),
         y=alt.Y("°C:Q", scale=alt.Scale(zero=False)),
         color=alt.Color("serie:N", title=None, scale=alt.Scale(domain=["Temperatura de la hora", "Promedio de 24 h"],
-                                                                range=[AZUL, NARANJA]), legend=alt.Legend(orient="top")),
+                                                                range=[CELESTE, AZUL]), legend=alt.Legend(orient="top")),
         tooltip=[alt.Tooltip("hora:Q", title="Hora"), alt.Tooltip("serie:N", title="Serie"), alt.Tooltip("°C:Q", format=".1f")],
-    ).properties(height=260)
+    ).properties(height=260))
+
+
+def pie() -> None:
+    """Pie de página con la línea de degradado de las diapositivas."""
+    with st.container(key="pie"):
+        st.caption("Programa Energía Digital 2026 · Fundación YPF + Jump Educación")
 
 
 def tabla_variables(variables: pd.DataFrame) -> pd.DataFrame:
@@ -130,6 +136,7 @@ def tabla_variables(variables: pd.DataFrame) -> pd.DataFrame:
 # Pagina
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="Forecast de demanda del MEM", page_icon="⚡", layout="wide")
+st.html(CSS)                           # estilo de la presentación (solo apariencia)
 api.estado.update(cargar_snapshot())   # api.calcular_pronostico usa el snapshot cargado
 
 with st.sidebar:
@@ -156,17 +163,22 @@ with st.sidebar:
         resultado["modo"] = modo
         st.session_state["resultado"] = resultado
 
-st.title("Forecast de demanda eléctrica horaria del MEM")
-st.caption("Proyecto final · Data Science · Programa Energía Digital 2026 — Juan Serrano y Rodrigo Duarte")
+with st.container(key="portada"):     # franja con el degradado de la portada de la presentación
+    st.markdown('<p class="volanta">Proyecto final · Data Science</p>', unsafe_allow_html=True)
+    st.title("Forecast de demanda eléctrica horaria del MEM", anchor=False)
+    st.markdown("Pronóstico de las próximas 24 horas a partir del calendario y la temperatura")
+    st.caption("Juan Serrano · Rodrigo Duarte")
 st.info("**Métricas históricas del modelo** (evaluaciones pasadas, no el error del pronóstico mostrado): "
         "MAPE test 4,1 % · MAPE agosto de 2026 4,0 %")
 
 resultado = st.session_state.get("resultado")
 if resultado is None:
     st.write("Elegí una fecha y apretá **Pronosticar**.")
+    pie()
     st.stop()
 if resultado["error"] is not None:
     mostrar_error(resultado["error"])
+    pie()
     st.stop()
 
 respuesta, variables = resultado["respuesta"], resultado["variables"]
@@ -179,12 +191,14 @@ if resultado["modo"] == MODO_HISTORICO:
     st.warning(f"**{MODO_HISTORICO}.** Reproducción histórica, no un pronóstico actual: se compara con la demanda "
                "real que informó CAMMESA ese día.")
 
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Demanda máxima (MWh)", numero(respuesta.resumen.demanda_maxima_mwh))
-c2.metric("Hora del pico", f"{respuesta.resumen.hora_de_la_maxima} h")
-c3.metric("Demanda mínima (MWh)", numero(horas["demanda_mwh"].min()))
-c4.metric("Energía del día (GWh)", numero(respuesta.resumen.energia_del_dia_mwh / 1000, 1))
-c5.metric("Temp. mín / máx (°C)", f"{numero(horas['temperatura_c'].min(), 1)} / {numero(horas['temperatura_c'].max(), 1)}")
+with st.container(key="metricas"):     # tarjetas en dos filas (3 + 2) para que los números no se corten
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Demanda máxima (MWh)", numero(respuesta.resumen.demanda_maxima_mwh))
+    c2.metric("Hora del pico", f"{respuesta.resumen.hora_de_la_maxima} h")
+    c3.metric("Demanda mínima (MWh)", numero(horas["demanda_mwh"].min()))
+    c4, c5 = st.columns(2)
+    c4.metric("Energía del día (GWh)", numero(respuesta.resumen.energia_del_dia_mwh / 1000, 1))
+    c5.metric("Temp. mín / máx (°C)", f"{numero(horas['temperatura_c'].min(), 1)} / {numero(horas['temperatura_c'].max(), 1)}")
 
 st.markdown("#### Demanda horaria: pronóstico central y banda nominal del 80 %")
 st.altair_chart(grafico_demanda(horas, resultado["real"]), width="stretch")
@@ -234,3 +248,5 @@ st.caption(alcance.relacion_con_la_evaluacion)
 st.markdown("#### Advertencias de la API")
 for advertencia in respuesta.advertencias:
     st.warning(advertencia)
+
+pie()

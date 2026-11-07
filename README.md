@@ -85,8 +85,9 @@ forecast-demanda-mem/
 ├── demo/
 │   ├── streamlit_app.py   # demo con Streamlit: reutiliza la lógica de la API
 │   ├── caso_historico.py  # caso histórico validado del 12/08/2026
+│   ├── estilo.py          # estilo visual de la presentación (solo apariencia)
 │   └── requirements.txt   # dependencias de la demo, separadas y fijadas
-├── .streamlit/config.toml # tema de la demo
+├── .streamlit/config.toml # tema de la demo: colores y tipografías de la presentación
 ├── models/
 │   ├── gb_calendario_clima_2026-08-01/   # snapshot evaluado en agosto de 2026: modelo.joblib + metadatos.json
 │   └── resultados_experimentos.json       # métricas atadas a la huella sha256 de cada artefacto
@@ -357,11 +358,11 @@ pip install -r demo/requirements.txt
 streamlit run demo/streamlit_app.py
 ```
 
-**Despliegue en Streamlit Community Cloud: es viable.**
-- **Por qué:** el repo es público, el snapshot (2,2 MB) está versionado, `demo/requirements.txt` fija las versiones y Open-Meteo es accesible y gratuito para uso no comercial.
-- **Configuración al crear la app:** archivo principal `demo/streamlit_app.py`, Python 3.12.
+**Publicada en Streamlit Community Cloud:** https://forecast-demanda-mem.streamlit.app
+- **Por qué funciona ahí:** el repo es público, el snapshot (2,2 MB) está versionado, `demo/requirements.txt` fija las versiones y Open-Meteo es accesible y gratuito para uso no comercial.
+- **Configuración de la app:** rama `main`, archivo principal `demo/streamlit_app.py`, Python 3.12. Se actualiza sola con cada cambio en `main`.
 - **Requisito:** scikit-learn tiene que quedar en 1.9.0, porque la API no carga el snapshot con otra versión.
-- **Lo que no se probó:** no se hizo un despliegue real; requiere una cuenta de Streamlit vinculada a GitHub.
+- **Permisos en GitHub:** Streamlit necesita acceso a la organización y que la organización tenga habilitadas las *deploy keys* (Settings → Member privileges → Deploy keys).
 - **Riesgo:** la app gratuita se suspende si nadie la usa y tarda en volver. Conviene abrirla antes de presentar, o usar el caso histórico.
 
 ## Reflexión: sesgos, límites y uso responsable
