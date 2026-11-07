@@ -3,7 +3,7 @@
 Proyecto final del curso de Data Science — Programa Energía Digital 2026 (Fundación YPF + Jump Educación).
 
 **Integrantes:** Juan Serrano · Rodrigo Duarte\
-**Demo en vivo:** https://forecast-demanda-mem.streamlit.app\
+**Demo en vivo:** [forecast-demanda-mem.streamlit.app](https://forecast-demanda-mem.streamlit.app)\
 **Detalle técnico:** [docs/detalles_tecnicos.md](docs/detalles_tecnicos.md)
 
 ![Agosto de 2026: demanda real y pronósticos emitidos el día anterior](reports/figures/04_agosto_2026.png)
@@ -151,7 +151,7 @@ Notebook [`03_clustering.ipynb`](notebooks/03_clustering.ipynb). Cada día (2.03
 - Cada respuesta dice su **alcance**: modo, fuente meteorológica, antigüedad del modelo y qué tan comparable es con la evaluación. El 80 % de la banda es el nivel nominal; la API no promete esa cobertura.
 - Se niega a arrancar si el archivo del modelo no coincide con su huella sha256 o si cambia la versión de scikit-learn.
 
-**Demo con Streamlit:** https://forecast-demanda-mem.streamlit.app. Usa la misma función que el endpoint, sin lógica propia. Tiene dos modos: el pronóstico de un día con el clima actual de Open-Meteo, y un caso histórico validado (12/08/2026) que se compara con la demanda real de CAMMESA.
+**Demo con Streamlit:** [forecast-demanda-mem.streamlit.app](https://forecast-demanda-mem.streamlit.app). Usa la misma función que el endpoint, sin lógica propia. Tiene dos modos: el pronóstico de un día con el clima actual de Open-Meteo, y un caso histórico validado (12/08/2026) que se compara con la demanda real de CAMMESA.
 
 ![Demo con Streamlit: caso histórico validado del 12/08/2026](reports/figures/05_demo_streamlit.png)
 
